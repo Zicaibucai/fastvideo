@@ -1,0 +1,1504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EVAI 图片转视频 · 运镜模板库</title>
+<style>
+:root {
+  --paper: #F3F1EA;
+  --card: #FFFFFF;
+  --ink: #18222F;
+  --ink-soft: #4E5B6B;
+  --muted: #8A94A3;
+  --line: #E2DED2;
+  --blue: #1F4E8C;
+  --blue-deep: #14335F;
+  --blue-line: #C9D8EA;
+  --accent: #B23A1E;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(24,34,47,.05), 0 8px 24px rgba(24,34,47,.06);
+  --font: "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",-apple-system,sans-serif;
+  --mono: "SFMono-Regular","SF Mono","JetBrains Mono","Menlo",monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body { background: var(--paper); color: var(--ink); font-family: var(--font); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+.blueprint {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(31,78,140,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(31,78,140,.04) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 28px; }
+
+/* Header */
+header.hero {
+  background: linear-gradient(135deg, var(--blue-deep) 0%, var(--blue) 70%, #2E6CA5 100%);
+  color: #fff; padding: 64px 0 56px; position: relative; overflow: hidden;
+}
+header.hero::after {
+  content:""; position:absolute; inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+  background-size: 44px 44px; pointer-events:none;
+}
+.hero-inner { position: relative; z-index: 1; }
+.eyebrow { font-size: 13px; letter-spacing: .22em; color: #B9CBE2; margin-bottom: 14px; display:flex; align-items:center; gap:10px; }
+.eyebrow::before { content:""; width: 26px; height: 2px; background: #E8A33D; display:inline-block; }
+h1 { font-size: clamp(30px, 4.6vw, 46px); font-weight: 700; letter-spacing: .01em; line-height: 1.15; }
+.hero-sub { margin-top: 14px; color: #D6E2F0; font-size: 16px; max-width: 660px; }
+.hero-stats { margin-top: 28px; display: flex; gap: 14px; flex-wrap: wrap; }
+.stat { background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.18); border-radius: 10px; padding: 10px 18px; display: flex; align-items: baseline; gap: 8px; }
+.stat b { font-size: 24px; font-weight: 700; }
+.stat span { font-size: 13px; color: #D6E2F0; }
+
+/* Sticky filter */
+.navbar { position: sticky; top: 0; z-index: 20; background: rgba(243,241,234,.9); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.nav-inner { display: flex; align-items: center; gap: 8px; padding: 12px 28px; max-width: 1240px; margin: 0 auto; }
+.nav-inner .brand { font-weight: 700; font-size: 15px; margin-right: 16px; color: var(--blue-deep); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.filter-btn { border: 1px solid var(--line); background: var(--card); color: var(--ink-soft); padding: 7px 16px; border-radius: 999px; font-size: 13.5px; cursor: pointer; transition: all .15s ease; font-family: inherit; }
+.filter-btn:hover { border-color: var(--blue); color: var(--blue-deep); }
+.filter-btn.active { background: var(--blue-deep); border-color: var(--blue-deep); color: #fff; }
+.filter-btn .n { opacity: .75; font-size: 12px; margin-left: 4px; }
+
+/* Sections */
+.section { margin: 44px 0 8px; scroll-margin-top: 90px; }
+.section-head { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+.section-head h2 { font-size: 22px; font-weight: 700; color: var(--blue-deep); }
+.section-head .rule { flex: 1; height: 1px; background: var(--line); }
+.section-head .rule-n { font-size: 12px; color: var(--muted); letter-spacing: .08em; white-space: nowrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 24px; margin-bottom: 48px; }
+
+/* Card */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); display: flex; flex-direction: column; transition: transform .18s ease, box-shadow .18s ease; }
+.card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(24,34,47,.10); }
+.media { position: relative; aspect-ratio: 16/9; background: #0e1622; }
+.media video { width: 100%; height: 100%; object-fit: cover; display: block; background: #0e1622; }
+.cat-tag { position: absolute; top: 10px; left: 10px; font-size: 12px; padding: 4px 10px; border-radius: 999px; color: #fff; }
+.tag-outdoor { background: rgba(31,78,140,.9); }
+.tag-sl { background: rgba(122,74,158,.92); }
+.shot-no { position: absolute; bottom: 10px; right: 10px; font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: rgba(255,255,255,.85); background: rgba(0,0,0,.45); padding: 3px 8px; border-radius: 6px; }
+.body { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 13px; }
+.title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.title-row h3 { font-size: 18px; font-weight: 700; line-height: 1.3; }
+.apply { font-size: 12px; color: var(--blue-deep); background: var(--blue-line); padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+
+/* frames */
+.frames { display: flex; align-items: center; gap: 8px; }
+.frames-single { gap: 0; }
+.frame { flex: 1; cursor: zoom-in; }
+.frame img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; transition: border-color .15s ease; }
+.frame img:hover { border-color: var(--blue); }
+.frame figcaption { font-size: 11px; color: var(--muted); margin-top: 4px; text-align: center; letter-spacing: .05em; }
+.frame-arrow { color: var(--blue); flex: 0 0 auto; display: flex; align-items: center; }
+
+/* prompt */
+.prompt { border: 1px solid var(--line); border-left: 3px solid var(--accent); background: #FBFAF6; border-radius: 8px; padding: 10px 12px; }
+.prompt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.prompt-head > span { font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: .08em; }
+.copy-btn { border: 1px solid var(--accent); color: var(--accent); background: transparent; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer; font-family: inherit; transition: all .15s ease; }
+.copy-btn:hover { background: var(--accent); color: #fff; }
+.copy-btn.copied { background: #2F7D4F; border-color: #2F7D4F; color: #fff; }
+.prompt p { font-family: var(--mono); font-size: 13px; line-height: 1.65; color: var(--ink); word-break: break-word; }
+.intro { font-size: 13.5px; color: var(--ink-soft); }
+.intro-label { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .08em; margin-right: 8px; border: 1px solid var(--line); padding: 1px 6px; border-radius: 4px; }
+
+/* Lightbox */
+.lb { position: fixed; inset: 0; z-index: 100; background: rgba(10,16,26,.88); display: none; align-items: center; justify-content: center; flex-direction: column; padding: 24px; }
+.lb.open { display: flex; }
+.lb img { max-width: 92vw; max-height: 80vh; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.lb .lb-cap { color: #dbe4ef; margin-top: 14px; font-size: 14px; }
+.lb .lb-close { position: absolute; top: 20px; right: 26px; color: #fff; font-size: 30px; cursor: pointer; background: none; border: none; }
+.lb .lb-close:hover { opacity: .8; }
+
+footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--muted); font-size: 13px; }
+footer a { color: var(--blue); text-decoration: none; }
+
+@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .nav-inner { flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } .card:hover { transform: none; } }
+</style>
+</head>
+<body>
+<div class="blueprint"></div>
+
+<header class="hero">
+  <div class="wrap hero-inner">
+    <div class="eyebrow">EVAI · img2Video 模板参考</div>
+    <h1>建筑运镜模板库</h1>
+    <p class="hero-sub">从 EVAI「图片转视频」页面抓取的专业运镜模板。每个模板包含提示词、首尾帧参考图与视频演示,可直接用于 AI 视频生成的运镜提示。</p>
+    <div class="hero-stats">
+      <div class="stat"><b>12</b><span>建筑外景运镜</span></div>
+      <div class="stat"><b>30</b><span>首尾帧 · 创意运镜</span></div>
+      <div class="stat"><b>42</b><span>模板总数</span></div>
+    </div>
+  </div>
+</header>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <span class="brand">运镜模板</span>
+    <div class="filters" id="filters">
+      <button class="filter-btn active" data-filter="all">全部 <span class="n">42</span></button>
+      <button class="filter-btn" data-filter="建筑外景运镜">建筑外景运镜 <span class="n">12</span></button>
+      <button class="filter-btn" data-filter="首尾帧/创意运镜">首尾帧 · 创意运镜 <span class="n">30</span></button>
+    </div>
+  </div>
+</nav>
+
+<main class="wrap">
+  <section class="section" id="sec-outdoor">
+    <div class="section-head">
+      <h2>建筑外景运镜</h2>
+      <span class="rule"></span>
+      <span class="rule-n">CAMERA / EXTERIOR</span>
+    </div>
+    <div class="grid" id="grid-outdoor">
+    <article class="card" data-cat="建筑外景运镜" id="t01">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/01_建筑平移_start.jpg" src="videos/01_建筑平移.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 01</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑平移</h3>
+          <span class="apply">适用：立面展示 / 街景</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/01_建筑平移_start.jpg" alt="原图" loading="lazy" data-full="frames/01_建筑平移_start.png" data-name="建筑平移 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头逐渐向左平移，光影在变化，匀速">复制提示词</button>
+          </div>
+          <p>镜头逐渐向左平移，光影在变化，匀速</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头逐渐向左平移，光影在变化，匀速</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t02">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/02_建筑鸟瞰环绕_start.jpg" src="videos/02_建筑鸟瞰环绕.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 02</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑鸟瞰环绕</h3>
+          <span class="apply">适用：场地分析 / 规划</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/02_建筑鸟瞰环绕_start.jpg" alt="原图" loading="lazy" data-full="frames/02_建筑鸟瞰环绕_start.png" data-name="建筑鸟瞰环绕 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="俯拍建筑，环绕拍摄，人来人往，车来车往，光影变化，云朵飘动">复制提示词</button>
+          </div>
+          <p>俯拍建筑，环绕拍摄，人来人往，车来车往，光影变化，云朵飘动</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>俯拍建筑，环绕拍摄，人来人往，车来车往，光影变化，云朵飘动</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t03">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/03_建筑从整体到局部_start.jpg" src="videos/03_建筑从整体到局部.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 03</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑从整体到局部</h3>
+          <span class="apply">适用：入口节点 / 定位</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/03_建筑从整体到局部_start.jpg" alt="原图" loading="lazy" data-full="frames/03_建筑从整体到局部_start.png" data-name="建筑从整体到局部 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头逐渐下降，停留在建筑的主入口处">复制提示词</button>
+          </div>
+          <p>镜头逐渐下降，停留在建筑的主入口处</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头逐渐下降，停留在建筑的主入口处</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t04">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/04_建筑从室外到室内_start.jpg" src="videos/04_建筑从室外到室内.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 04</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑从室外到室内</h3>
+          <span class="apply">适用：空间过渡 / 贯通</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/04_建筑从室外到室内_start.jpg" alt="原图" loading="lazy" data-full="frames/04_建筑从室外到室内_start.png" data-name="建筑从室外到室内 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头向主入口推进，入口玻璃门打开，进入室内">复制提示词</button>
+          </div>
+          <p>镜头向主入口推进，入口玻璃门打开，进入室内</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头向主入口推进，入口玻璃门打开，进入室内</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t05">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/05_希区柯克推进_start.jpg" src="videos/05_希区柯克推进.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 05</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>希区柯克推进</h3>
+          <span class="apply">适用：视觉冲击 / 概念</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/05_希区柯克推进_start.jpg" alt="原图" loading="lazy" data-full="frames/05_希区柯克推进_start.png" data-name="希区柯克推进 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头快速在建筑上空沿着左下侧飞向右上侧方向快速推进">复制提示词</button>
+          </div>
+          <p>镜头快速在建筑上空沿着左下侧飞向右上侧方向快速推进</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头快速在建筑上空沿着左下侧飞向右上侧方向快速推进</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t06">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/06_中心环绕_start.jpg" src="videos/06_中心环绕.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 06</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>中心环绕</h3>
+          <span class="apply">适用：单体建筑 / 雕塑</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/06_中心环绕_start.jpg" alt="原图" loading="lazy" data-full="frames/06_中心环绕_start.png" data-name="中心环绕 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头沿着画面中间的主要建筑环绕">复制提示词</button>
+          </div>
+          <p>镜头沿着画面中间的主要建筑环绕</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头沿着画面中间的主要建筑环绕</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t07">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/07_起重机_start.jpg" src="videos/07_起重机.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 07</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>起重机</h3>
+          <span class="apply">适用：高层塔楼 / 气势</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/07_起重机_start.jpg" alt="原图" loading="lazy" data-full="frames/07_起重机_start.png" data-name="起重机 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="FPV镜头，镜头从下往上快速推进，最后俯瞰写字楼">复制提示词</button>
+          </div>
+          <p>FPV镜头，镜头从下往上快速推进，最后俯瞰写字楼</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>FPV镜头，镜头从下往上快速推进，最后俯瞰写字楼</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t08">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/08_超级拉远_start.jpg" src="videos/08_超级拉远.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 08</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>超级拉远</h3>
+          <span class="apply">适用：城市区位 / 宏观</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/08_超级拉远_start.jpg" alt="原图" loading="lazy" data-full="frames/08_超级拉远_start.png" data-name="超级拉远 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头拉远，展示城市总体规划图，再到卫星地图">复制提示词</button>
+          </div>
+          <p>镜头拉远，展示城市总体规划图，再到卫星地图</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头拉远，展示城市总体规划图，再到卫星地图</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t09">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/09_延时摄影_start.jpg" src="videos/09_延时摄影.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 09</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>延时摄影</h3>
+          <span class="apply">适用：光影分析 / 氛围</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/09_延时摄影_start.jpg" alt="原图" loading="lazy" data-full="frames/09_延时摄影_start.png" data-name="延时摄影 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头固定，从天亮一直拍到天黑，用延时摄影">复制提示词</button>
+          </div>
+          <p>镜头固定，从天亮一直拍到天黑，用延时摄影</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头固定，从天亮一直拍到天黑，用延时摄影</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t10">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/10_俯瞰➕环绕_start.jpg" src="videos/10_俯瞰➕环绕.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 10</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>俯瞰➕环绕</h3>
+          <span class="apply">适用：屋顶结构 / 布局</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/10_俯瞰➕环绕_start.jpg" alt="原图" loading="lazy" data-full="frames/10_俯瞰➕环绕_start.png" data-name="俯瞰➕环绕 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头从高空俯视建筑，捕捉建筑的顶部全貌后，缓慢旋转，使镜头以建筑为中心">复制提示词</button>
+          </div>
+          <p>镜头从高空俯视建筑，捕捉建筑的顶部全貌后，缓慢旋转，使镜头以建筑为中心</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头从高空俯视建筑，捕捉建筑的顶部全貌后，缓慢旋转，使镜头以建筑为中心</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t11">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/11_推进+仰拍_start.jpg" src="videos/11_推进+仰拍.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 11</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>推进+仰拍</h3>
+          <span class="apply">适用：建筑高度 / 仰视</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/11_推进+仰拍_start.jpg" alt="原图" loading="lazy" data-full="frames/11_推进+仰拍_start.png" data-name="推进+仰拍 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头先靠近大楼，从地面开始拍地基，然后把镜头垂直往上抬，贴着大楼外面往上拍，一直抬到楼顶">复制提示词</button>
+          </div>
+          <p>镜头先靠近大楼，从地面开始拍地基，然后把镜头垂直往上抬，贴着大楼外面往上拍，一直抬到楼顶</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头先靠近大楼，从地面开始拍地基，然后把镜头垂直往上抬，贴着大楼外面往上拍，一直抬到楼顶</p>
+      </div>
+    </article>
+    <article class="card" data-cat="建筑外景运镜" id="t12">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/12_拉远_start.jpg" src="videos/12_拉远.mp4"></video>
+        <span class="cat-tag tag-outdoor">外景运镜</span>
+        <span class="shot-no">镜头 12</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>拉远</h3>
+          <span class="apply">适用：全貌展示 / 结尾</span>
+        </div>
+        <div class="frames frames-single">
+          <figure class="frame">
+            <img src="thumbs/12_拉远_start.jpg" alt="原图" loading="lazy" data-full="frames/12_拉远_start.png" data-name="拉远 参考原图">
+            <figcaption>参考原图</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="镜头逐渐推向远景，展现整个建筑，天空的清新蓝色背景增添视觉效果">复制提示词</button>
+          </div>
+          <p>镜头逐渐推向远景，展现整个建筑，天空的清新蓝色背景增添视觉效果</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>镜头逐渐推向远景，展现整个建筑，天空的清新蓝色背景增添视觉效果</p>
+      </div>
+    </article>
+    </div>
+  </section>
+  <section class="section" id="sec-sl">
+    <div class="section-head">
+      <h2>首尾帧 · 创意运镜</h2>
+      <span class="rule"></span>
+      <span class="rule-n">FIRST · LAST FRAME</span>
+    </div>
+    <div class="grid" id="grid-sl">
+    <article class="card" data-cat="首尾帧/创意运镜" id="t13">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/13_建筑生长动画_start.jpg" src="videos/13_建筑生长动画.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 13</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑生长动画</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/13_建筑生长动画_start.jpg" alt="首帧" loading="lazy" data-full="frames/13_建筑生长动画_start.png" data-name="建筑生长动画 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/13_建筑生长动画_end.jpg" alt="尾帧" loading="lazy" data-full="frames/13_建筑生长动画_end.png" data-name="建筑生长动画 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="一栋建筑从地面逐渐向上生长出来，固定鏡头。">复制提示词</button>
+          </div>
+          <p>一栋建筑从地面逐渐向上生长出来，固定鏡头。</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>一栋建筑从地面逐渐向上生长出来，固定鏡头。</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t14">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/14_城市生长动画_start.jpg" src="videos/14_城市生长动画.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 14</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>城市生长动画</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/14_城市生长动画_start.jpg" alt="首帧" loading="lazy" data-full="frames/14_城市生长动画_start.png" data-name="城市生长动画 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/14_城市生长动画_end.jpg" alt="尾帧" loading="lazy" data-full="frames/14_城市生长动画_end.png" data-name="城市生长动画 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="城市生长动画">复制提示词</button>
+          </div>
+          <p>城市生长动画</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>城市生长动画</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t15">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/15_建筑像火箭一样升空_start.jpg" src="videos/15_建筑像火箭一样升空.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 15</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑像火箭一样升空</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/15_建筑像火箭一样升空_start.jpg" alt="首帧" loading="lazy" data-full="frames/15_建筑像火箭一样升空_start.png" data-name="建筑像火箭一样升空 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/15_建筑像火箭一样升空_end.jpg" alt="尾帧" loading="lazy" data-full="frames/15_建筑像火箭一样升空_end.png" data-name="建筑像火箭一样升空 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="建筑像火箭一样升空">复制提示词</button>
+          </div>
+          <p>建筑像火箭一样升空</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>建筑像火箭一样升空</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t16">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/16_线稿转实景图_start.jpg" src="videos/16_线稿转实景图.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 16</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>线稿转实景图</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/16_线稿转实景图_start.jpg" alt="首帧" loading="lazy" data-full="frames/16_线稿转实景图_start.png" data-name="线稿转实景图 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/16_线稿转实景图_end.jpg" alt="尾帧" loading="lazy" data-full="frames/16_线稿转实景图_end.png" data-name="线稿转实景图 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="线稿转实景图">复制提示词</button>
+          </div>
+          <p>线稿转实景图</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>线稿转实景图</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t17">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/17_根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片_start.jpg" src="videos/17_根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 17</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/17_根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片_start.jpg" alt="首帧" loading="lazy" data-full="frames/17_根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片_start.png" data-name="根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/17_根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片_end.jpg" alt="尾帧" loading="lazy" data-full="frames/17_根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片_end.png" data-name="根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片">复制提示词</button>
+          </div>
+          <p>根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>根据这张城市公园中的多层图书馆的建筑俯视图，生成对应的低空平视规划实景照片</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t18">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/18_视角转换_start.jpg" src="videos/18_视角转换.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 18</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>视角转换</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/18_视角转换_start.jpg" alt="首帧" loading="lazy" data-full="frames/18_视角转换_start.png" data-name="视角转换 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/18_视角转换_end.jpg" alt="尾帧" loading="lazy" data-full="frames/18_视角转换_end.png" data-name="视角转换 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="视角转换">复制提示词</button>
+          </div>
+          <p>视角转换</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>视角转换</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t19">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/19_建筑工人施工将建筑的立面材质改为红砖_start.jpg" src="videos/19_建筑工人施工将建筑的立面材质改为红砖.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 19</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑工人施工将建筑的立面材质改为红砖</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/19_建筑工人施工将建筑的立面材质改为红砖_start.jpg" alt="首帧" loading="lazy" data-full="frames/19_建筑工人施工将建筑的立面材质改为红砖_start.png" data-name="建筑工人施工将建筑的立面材质改为红砖 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/19_建筑工人施工将建筑的立面材质改为红砖_end.jpg" alt="尾帧" loading="lazy" data-full="frames/19_建筑工人施工将建筑的立面材质改为红砖_end.png" data-name="建筑工人施工将建筑的立面材质改为红砖 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="建筑工人施工将建筑的立面材质改为红砖">复制提示词</button>
+          </div>
+          <p>建筑工人施工将建筑的立面材质改为红砖</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>建筑工人施工将建筑的立面材质改为红砖</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t20">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/20_天气转变为大雾天气，固定视角，延时摄影_start.jpg" src="videos/20_天气转变为大雾天气，固定视角，延时摄影.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 20</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>天气转变为大雾天气，固定视角，延时摄影</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/20_天气转变为大雾天气，固定视角，延时摄影_start.jpg" alt="首帧" loading="lazy" data-full="frames/20_天气转变为大雾天气，固定视角，延时摄影_start.png" data-name="天气转变为大雾天气，固定视角，延时摄影 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/20_天气转变为大雾天气，固定视角，延时摄影_end.jpg" alt="尾帧" loading="lazy" data-full="frames/20_天气转变为大雾天气，固定视角，延时摄影_end.png" data-name="天气转变为大雾天气，固定视角，延时摄影 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="天气转变为大雾天气，固定视角，延时摄影">复制提示词</button>
+          </div>
+          <p>天气转变为大雾天气，固定视角，延时摄影</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>天气转变为大雾天气，固定视角，延时摄影</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t21">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/21_从白天到日落，固定视角，延时摄影_start.jpg" src="videos/21_从白天到日落，固定视角，延时摄影.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 21</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>从白天到日落，固定视角，延时摄影</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/21_从白天到日落，固定视角，延时摄影_start.jpg" alt="首帧" loading="lazy" data-full="frames/21_从白天到日落，固定视角，延时摄影_start.png" data-name="从白天到日落，固定视角，延时摄影 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/21_从白天到日落，固定视角，延时摄影_end.jpg" alt="尾帧" loading="lazy" data-full="frames/21_从白天到日落，固定视角，延时摄影_end.png" data-name="从白天到日落，固定视角，延时摄影 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="从白天到日落，固定视角，延时摄影">复制提示词</button>
+          </div>
+          <p>从白天到日落，固定视角，延时摄影</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>从白天到日落，固定视角，延时摄影</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t22">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/22_将图片中的氛围切换到夜晚，突出建筑内的灯光照明_start.jpg" src="videos/22_将图片中的氛围切换到夜晚，突出建筑内的灯光照明.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 22</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>将图片中的氛围切换到夜晚，突出建筑内的灯光照明</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/22_将图片中的氛围切换到夜晚，突出建筑内的灯光照明_start.jpg" alt="首帧" loading="lazy" data-full="frames/22_将图片中的氛围切换到夜晚，突出建筑内的灯光照明_start.png" data-name="将图片中的氛围切换到夜晚，突出建筑内的灯光照明 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/22_将图片中的氛围切换到夜晚，突出建筑内的灯光照明_end.jpg" alt="尾帧" loading="lazy" data-full="frames/22_将图片中的氛围切换到夜晚，突出建筑内的灯光照明_end.png" data-name="将图片中的氛围切换到夜晚，突出建筑内的灯光照明 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="将图片中的氛围切换到夜晚，突出建筑内的灯光照明">复制提示词</button>
+          </div>
+          <p>将图片中的氛围切换到夜晚，突出建筑内的灯光照明</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>将图片中的氛围切换到夜晚，突出建筑内的灯光照明</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t23">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/23_图片中的天气切换为冬天，白雪覆盖建筑地面树木_start.jpg" src="videos/23_图片中的天气切换为冬天，白雪覆盖建筑地面树木.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 23</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>图片中的天气切换为冬天，白雪覆盖建筑地面树木</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/23_图片中的天气切换为冬天，白雪覆盖建筑地面树木_start.jpg" alt="首帧" loading="lazy" data-full="frames/23_图片中的天气切换为冬天，白雪覆盖建筑地面树木_start.png" data-name="图片中的天气切换为冬天，白雪覆盖建筑地面树木 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/23_图片中的天气切换为冬天，白雪覆盖建筑地面树木_end.jpg" alt="尾帧" loading="lazy" data-full="frames/23_图片中的天气切换为冬天，白雪覆盖建筑地面树木_end.png" data-name="图片中的天气切换为冬天，白雪覆盖建筑地面树木 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="图片中的天气切换为冬天，白雪覆盖建筑地面树木">复制提示词</button>
+          </div>
+          <p>图片中的天气切换为冬天，白雪覆盖建筑地面树木</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>图片中的天气切换为冬天，白雪覆盖建筑地面树木</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t24">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/24_变成微缩景观_start.jpg" src="videos/24_变成微缩景观.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 24</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>变成微缩景观</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/24_变成微缩景观_start.jpg" alt="首帧" loading="lazy" data-full="frames/24_变成微缩景观_start.png" data-name="变成微缩景观 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/24_变成微缩景观_end.jpg" alt="尾帧" loading="lazy" data-full="frames/24_变成微缩景观_end.png" data-name="变成微缩景观 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="变成微缩景观">复制提示词</button>
+          </div>
+          <p>变成微缩景观</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>变成微缩景观</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t25">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/25_白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起_start.jpg" src="videos/25_白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 25</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/25_白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起_start.jpg" alt="首帧" loading="lazy" data-full="frames/25_白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起_start.png" data-name="白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/25_白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起_end.jpg" alt="尾帧" loading="lazy" data-full="frames/25_白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起_end.png" data-name="白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起">复制提示词</button>
+          </div>
+          <p>白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>白纸平整的置于桌面上，镜头快速由远景推近，紧接着环绕纸张进行旋转，以纸张为中心，线条开始如灵动的精灵般浮现交织，色彩逐渐晕染开来，随着镜头缓缓上升，画面中的线条与色彩不断汇聚、组合。建筑得轮廓逐渐清晰，最终画面定格在建筑图，这座宏伟的建筑完美呈现，仿佛从这张白纸之上拔地而起</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t26">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/26_变成微缩模型_start.jpg" src="videos/26_变成微缩模型.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 26</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>变成微缩模型</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/26_变成微缩模型_start.jpg" alt="首帧" loading="lazy" data-full="frames/26_变成微缩模型_start.png" data-name="变成微缩模型 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/26_变成微缩模型_end.jpg" alt="尾帧" loading="lazy" data-full="frames/26_变成微缩模型_end.png" data-name="变成微缩模型 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="变成微缩模型">复制提示词</button>
+          </div>
+          <p>变成微缩模型</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>变成微缩模型</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t27">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/27_街道翻新_start.jpg" src="videos/27_街道翻新.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 27</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>街道翻新</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/27_街道翻新_start.jpg" alt="首帧" loading="lazy" data-full="frames/27_街道翻新_start.png" data-name="街道翻新 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/27_街道翻新_end.jpg" alt="尾帧" loading="lazy" data-full="frames/27_街道翻新_end.png" data-name="街道翻新 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="街道翻新">复制提示词</button>
+          </div>
+          <p>街道翻新</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>街道翻新</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t28">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/28_根据手稿生成建筑_start.jpg" src="videos/28_根据手稿生成建筑.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 28</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>根据手稿生成建筑</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/28_根据手稿生成建筑_start.jpg" alt="首帧" loading="lazy" data-full="frames/28_根据手稿生成建筑_start.png" data-name="根据手稿生成建筑 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/28_根据手稿生成建筑_end.jpg" alt="尾帧" loading="lazy" data-full="frames/28_根据手稿生成建筑_end.png" data-name="根据手稿生成建筑 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="根据手稿生成建筑">复制提示词</button>
+          </div>
+          <p>根据手稿生成建筑</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>根据手稿生成建筑</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t29">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/29_色彩从中心晕开_start.jpg" src="videos/29_色彩从中心晕开.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 29</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>色彩从中心晕开</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/29_色彩从中心晕开_start.jpg" alt="首帧" loading="lazy" data-full="frames/29_色彩从中心晕开_start.png" data-name="色彩从中心晕开 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/29_色彩从中心晕开_end.jpg" alt="尾帧" loading="lazy" data-full="frames/29_色彩从中心晕开_end.png" data-name="色彩从中心晕开 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="色彩从中心晕开">复制提示词</button>
+          </div>
+          <p>色彩从中心晕开</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>色彩从中心晕开</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t30">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/30_对建筑进行设计标注_start.jpg" src="videos/30_对建筑进行设计标注.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 30</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>对建筑进行设计标注</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/30_对建筑进行设计标注_start.jpg" alt="首帧" loading="lazy" data-full="frames/30_对建筑进行设计标注_start.png" data-name="对建筑进行设计标注 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/30_对建筑进行设计标注_end.jpg" alt="尾帧" loading="lazy" data-full="frames/30_对建筑进行设计标注_end.png" data-name="对建筑进行设计标注 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="对建筑进行设计标注">复制提示词</button>
+          </div>
+          <p>对建筑进行设计标注</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>对建筑进行设计标注</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t31">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/31_生成建筑爆炸图_start.jpg" src="videos/31_生成建筑爆炸图.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 31</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>生成建筑爆炸图</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/31_生成建筑爆炸图_start.jpg" alt="首帧" loading="lazy" data-full="frames/31_生成建筑爆炸图_start.png" data-name="生成建筑爆炸图 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/31_生成建筑爆炸图_end.jpg" alt="尾帧" loading="lazy" data-full="frames/31_生成建筑爆炸图_end.png" data-name="生成建筑爆炸图 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="生成建筑爆炸图">复制提示词</button>
+          </div>
+          <p>生成建筑爆炸图</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>生成建筑爆炸图</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t32">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/32_两名女士走到沙发上聊天_start.jpg" src="videos/32_两名女士走到沙发上聊天.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 32</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>两名女士走到沙发上聊天</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/32_两名女士走到沙发上聊天_start.jpg" alt="首帧" loading="lazy" data-full="frames/32_两名女士走到沙发上聊天_start.png" data-name="两名女士走到沙发上聊天 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/32_两名女士走到沙发上聊天_end.jpg" alt="尾帧" loading="lazy" data-full="frames/32_两名女士走到沙发上聊天_end.png" data-name="两名女士走到沙发上聊天 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="两名女士走到沙发上聊天">复制提示词</button>
+          </div>
+          <p>两名女士走到沙发上聊天</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>两名女士走到沙发上聊天</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t33">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/33_建筑工人对房屋进行翻新装修_start.jpg" src="videos/33_建筑工人对房屋进行翻新装修.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 33</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>建筑工人对房屋进行翻新装修</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/33_建筑工人对房屋进行翻新装修_start.jpg" alt="首帧" loading="lazy" data-full="frames/33_建筑工人对房屋进行翻新装修_start.png" data-name="建筑工人对房屋进行翻新装修 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/33_建筑工人对房屋进行翻新装修_end.jpg" alt="尾帧" loading="lazy" data-full="frames/33_建筑工人对房屋进行翻新装修_end.png" data-name="建筑工人对房屋进行翻新装修 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="建筑工人对房屋进行翻新装修">复制提示词</button>
+          </div>
+          <p>建筑工人对房屋进行翻新装修</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>建筑工人对房屋进行翻新装修</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t34">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/34_生成建筑轴测模型_start.jpg" src="videos/34_生成建筑轴测模型.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 34</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>生成建筑轴测模型</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/34_生成建筑轴测模型_start.jpg" alt="首帧" loading="lazy" data-full="frames/34_生成建筑轴测模型_start.png" data-name="生成建筑轴测模型 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/34_生成建筑轴测模型_end.jpg" alt="尾帧" loading="lazy" data-full="frames/34_生成建筑轴测模型_end.png" data-name="生成建筑轴测模型 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="生成建筑轴测模型">复制提示词</button>
+          </div>
+          <p>生成建筑轴测模型</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>生成建筑轴测模型</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t35">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/35_卡通人物走到沙发上交流_start.jpg" src="videos/35_卡通人物走到沙发上交流.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 35</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>卡通人物走到沙发上交流</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/35_卡通人物走到沙发上交流_start.jpg" alt="首帧" loading="lazy" data-full="frames/35_卡通人物走到沙发上交流_start.png" data-name="卡通人物走到沙发上交流 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/35_卡通人物走到沙发上交流_end.jpg" alt="尾帧" loading="lazy" data-full="frames/35_卡通人物走到沙发上交流_end.png" data-name="卡通人物走到沙发上交流 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="卡通人物走到沙发上交流">复制提示词</button>
+          </div>
+          <p>卡通人物走到沙发上交流</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>卡通人物走到沙发上交流</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t36">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/36_两个卡通人物走到咖啡厅门前喝咖啡_start.jpg" src="videos/36_两个卡通人物走到咖啡厅门前喝咖啡.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 36</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>两个卡通人物走到咖啡厅门前喝咖啡</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/36_两个卡通人物走到咖啡厅门前喝咖啡_start.jpg" alt="首帧" loading="lazy" data-full="frames/36_两个卡通人物走到咖啡厅门前喝咖啡_start.png" data-name="两个卡通人物走到咖啡厅门前喝咖啡 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/36_两个卡通人物走到咖啡厅门前喝咖啡_end.jpg" alt="尾帧" loading="lazy" data-full="frames/36_两个卡通人物走到咖啡厅门前喝咖啡_end.png" data-name="两个卡通人物走到咖啡厅门前喝咖啡 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="两个卡通人物走到咖啡厅门前喝咖啡">复制提示词</button>
+          </div>
+          <p>两个卡通人物走到咖啡厅门前喝咖啡</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>两个卡通人物走到咖啡厅门前喝咖啡</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t37">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/37_创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。_start.jpg" src="videos/37_创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 37</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/37_创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。_start.jpg" alt="首帧" loading="lazy" data-full="frames/37_创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。_start.png" data-name="创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/37_创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。_end.jpg" alt="尾帧" loading="lazy" data-full="frames/37_创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。_end.png" data-name="创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。">复制提示词</button>
+          </div>
+          <p>创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>创建这座建筑的剖面图，一侧显示完整的外部结构，另一侧显示内部的结构以及装修细节。保持比例准确，细节逼真。</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t38">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/38_绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。_start.jpg" src="videos/38_绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 38</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/38_绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。_start.jpg" alt="首帧" loading="lazy" data-full="frames/38_绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。_start.png" data-name="绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/38_绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。_end.jpg" alt="尾帧" loading="lazy" data-full="frames/38_绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。_end.png" data-name="绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。">复制提示词</button>
+          </div>
+          <p>绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>绘制一个 A6 折叠卡：打开时它会展示一个完整的 3D 球形小屋，里面有一座微型的纸花园和盆景树。</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t39">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/39_把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。_start.jpg" src="videos/39_把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 39</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/39_把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。_start.jpg" alt="首帧" loading="lazy" data-full="frames/39_把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。_start.png" data-name="把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/39_把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。_end.jpg" alt="尾帧" loading="lazy" data-full="frames/39_把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。_end.png" data-name="把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。">复制提示词</button>
+          </div>
+          <p>把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>把这张建筑线稿图转成实景照片，要求摄影质感，真实的光影效果。阴天乌云密布，建筑里透出灯光，建筑前有零星的行人。保持画面结构不变。</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t40">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/40_将图片变真实_start.jpg" src="videos/40_将图片变真实.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 40</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>将图片变真实</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/40_将图片变真实_start.jpg" alt="首帧" loading="lazy" data-full="frames/40_将图片变真实_start.png" data-name="将图片变真实 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/40_将图片变真实_end.jpg" alt="尾帧" loading="lazy" data-full="frames/40_将图片变真实_end.png" data-name="将图片变真实 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="将图片变真实">复制提示词</button>
+          </div>
+          <p>将图片变真实</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>将图片变真实</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t41">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/41_从红色圆圈沿箭头方向画出真实世界的视角_start.jpg" src="videos/41_从红色圆圈沿箭头方向画出真实世界的视角.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 41</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>从红色圆圈沿箭头方向画出真实世界的视角</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/41_从红色圆圈沿箭头方向画出真实世界的视角_start.jpg" alt="首帧" loading="lazy" data-full="frames/41_从红色圆圈沿箭头方向画出真实世界的视角_start.png" data-name="从红色圆圈沿箭头方向画出真实世界的视角 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/41_从红色圆圈沿箭头方向画出真实世界的视角_end.jpg" alt="尾帧" loading="lazy" data-full="frames/41_从红色圆圈沿箭头方向画出真实世界的视角_end.png" data-name="从红色圆圈沿箭头方向画出真实世界的视角 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="从红色圆圈沿箭头方向画出真实世界的视角">复制提示词</button>
+          </div>
+          <p>从红色圆圈沿箭头方向画出真实世界的视角</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>从红色圆圈沿箭头方向画出真实世界的视角</p>
+      </div>
+    </article>
+    <article class="card" data-cat="首尾帧/创意运镜" id="t42">
+      <div class="media">
+        <video controls playsinline preload="none" poster="thumbs/42_装修工人对房间进行布置_start.jpg" src="videos/42_装修工人对房间进行布置.mp4"></video>
+        <span class="cat-tag tag-sl">首尾帧</span>
+        <span class="shot-no">镜头 42</span>
+      </div>
+      <div class="body">
+        <div class="title-row">
+          <h3>装修工人对房间进行布置</h3>
+          <span class="apply">首尾帧</span>
+        </div>
+        <div class="frames">
+          <figure class="frame">
+            <img src="thumbs/42_装修工人对房间进行布置_start.jpg" alt="首帧" loading="lazy" data-full="frames/42_装修工人对房间进行布置_start.png" data-name="装修工人对房间进行布置 首帧">
+            <figcaption>首帧</figcaption>
+          </figure>
+          <div class="frame-arrow" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15"/><path d="m13 6 6 6-6 6"/></svg></div>
+          <figure class="frame">
+            <img src="thumbs/42_装修工人对房间进行布置_end.jpg" alt="尾帧" loading="lazy" data-full="frames/42_装修工人对房间进行布置_end.png" data-name="装修工人对房间进行布置 尾帧">
+            <figcaption>尾帧</figcaption>
+          </figure>
+        </div>
+        <div class="prompt">
+          <div class="prompt-head">
+            <span>提示词</span>
+            <button class="copy-btn" type="button" data-copy="装修工人对房间进行布置">复制提示词</button>
+          </div>
+          <p>装修工人对房间进行布置</p>
+        </div>
+        <p class="intro"><span class="intro-label">介绍</span>装修工人对房间进行布置</p>
+      </div>
+    </article>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    数据来源:<a href="https://www.openevai.com/img2Video" target="_blank" rel="noopener">https://www.openevai.com/img2Video</a>(OpenEVAI / Evai)。仅作参考学习用途。
+    <div class="src">共 42 个模板 · 视频与图片已下载至本地(videos/ 与 frames/),缩略图在 thumbs/</div>
+  </div>
+</footer>
+
+<div class="lb" id="lb">
+  <button class="lb-close" id="lbClose" aria-label="关闭">&times;</button>
+  <img id="lbImg" alt="">
+  <div class="lb-cap" id="lbCap"></div>
+</div>
+
+<script>
+(function(){
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.card'));
+  var filters = Array.prototype.slice.call(document.querySelectorAll('.filter-btn'));
+  function applyFilter(f){
+    filters.forEach(function(b){ b.classList.toggle('active', b.dataset.filter === f); });
+    cards.forEach(function(c){ c.style.display = (f === 'all' || c.dataset.cat === f) ? '' : 'none'; });
+  }
+  filters.forEach(function(b){ b.addEventListener('click', function(){ applyFilter(b.dataset.filter); }); });
+
+  var btns = document.querySelectorAll('.copy-btn');
+  btns.forEach(function(b){
+    b.addEventListener('click', function(){
+      var text = b.dataset.copy;
+      function done(){ b.textContent = '已复制 ✓'; b.classList.add('copied'); setTimeout(function(){ b.textContent = '复制提示词'; b.classList.remove('copied'); }, 1600); }
+      function legacy(){
+        var ta = document.createElement('textarea'); ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch(e) {} document.body.removeChild(ta);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done).catch(function(){ legacy(); done(); }); } else { legacy(); done(); }
+    });
+  });
+
+  var lb = document.getElementById('lb'), lbImg = document.getElementById('lbImg'), lbCap = document.getElementById('lbCap');
+  function openLb(src, name){ lbImg.src = src; lbCap.textContent = name; lb.classList.add('open'); }
+  document.querySelectorAll('.frame img').forEach(function(im){
+    im.addEventListener('click', function(){ openLb(im.dataset.full, im.dataset.name); });
+  });
+  document.getElementById('lbClose').addEventListener('click', function(){ lb.classList.remove('open'); });
+  lb.addEventListener('click', function(e){ if (e.target === lb) lb.classList.remove('open'); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape') lb.classList.remove('open'); });
+})();
+</script>
+</body>
+</html>

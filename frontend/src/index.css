@@ -1,0 +1,97 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
+
+.page-header {
+  margin-bottom: 16px;
+}
+
+.muted {
+  color: #8c8c8c;
+}
+
+.task-status-success {
+  color: #389e0d;
+}
+
+.task-status-error {
+  color: #cf1322;
+}
+
+.video-thumb {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* ===== 侧边栏（AppLayout）===== */
+.app-sider {
+  background: linear-gradient(180deg, #101a2e 0%, #16213a 100%) !important;
+}
+
+.app-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-logo {
+  height: 56px;
+  margin: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-sider .ant-menu {
+  background: transparent !important;
+  border-inline-end: none !important;
+}
+
+/* 菜单项选中反馈：左侧蓝色强调条 + 淡蓝底色，明确当前所在栏目 */
+.app-sider .ant-menu-item {
+  border-radius: 6px;
+}
+
+.app-sider .ant-menu-item-selected {
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.32) 0%, rgba(59, 130, 246, 0.1) 100%) !important;
+  color: #fff !important;
+  box-shadow: inset 3px 0 0 0 #60a5fa;
+}
+
+.app-sider .ant-menu-item-selected::after {
+  display: none !important;
+}
+
+.app-sider .ant-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 二级工作区标题加粗，与普通一级菜单区分 */
+.app-sider .workspace-submenu-title .ant-menu-title-content {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* 二级子菜单项更小字号、更深底色，体现层级 */
+.app-sider .ant-menu-sub .ant-menu-item {
+  font-size: 13px;
+}

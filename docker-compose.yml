@@ -1,0 +1,212 @@
+# 建筑工程AI投标视频平台 - Docker Compose
+# 一键启动: docker compose up -d --build
+# 前端 http://localhost:5173 · 后端 http://localhost:8000/docs
+
+name: fastvideo
+
+services:
+  # ---------- 数据库 ----------
+  postgres:
+    image: postgres:16-alpine
+    container_name: fastvideo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fastvideo
+      POSTGRES_PASSWORD: fastvideo
+      POSTGRES_DB: fastvideo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastvideo -d fastvideo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------- 缓存 / 队列 ----------
+  redis:
+    image: redis:7-alpine
+    container_name: fastvideo-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------- 对象存储（MinIO 兼容） ----------
+  minio:
+    image: minio/minio:latest
+    container_name: fastvideo-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: fastvideo
+      MINIO_ROOT_PASSWORD: fastvideo_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- 后端 API ----------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fastvideo-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://fastvideo:fastvideo@postgres:5432/fastvideo
+      REDIS_URL: redis://redis:6379/0
+      USE_CELERY: "true"
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: fastvideo
+      MINIO_SECRET_KEY: fastvideo_secret
+      MINIO_BUCKET: fastvideo
+      # AI 服务默认 Mock（无 Key），配置后自动切换真实服务
+      AI_LLM_PROVIDER: ${AI_LLM_PROVIDER:-disabled}
+      AI_LLM_BASE_URL: ${AI_LLM_BASE_URL:-}
+      AI_LLM_MODEL: ${AI_LLM_MODEL:-deepseek-v4-flash}
+      AI_IMAGE_PROVIDER: ${AI_IMAGE_PROVIDER:-seedream}
+      AI_IMAGE_BASE_URL: ${AI_IMAGE_BASE_URL:-}
+      AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-doubao-seedream-4-5-251128}
+      AI_VIDEO_PROVIDER: ${AI_VIDEO_PROVIDER:-seedance}
+      AI_VIDEO_BASE_URL: ${AI_VIDEO_BASE_URL:-}
+      AI_VIDEO_MODEL: ${AI_VIDEO_MODEL:-doubao-seedance-2-0-260128}
+      AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-disabled}
+      VOLCENGINE_TTS_API_KEY: ${VOLCENGINE_TTS_API_KEY:-}
+      VOLCENGINE_TTS_BASE_URL: ${VOLCENGINE_TTS_BASE_URL:-https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse}
+      VOLCENGINE_TTS_RESOURCE_ID: ${VOLCENGINE_TTS_RESOURCE_ID:-seed-tts-2.0}
+      VOLCENGINE_TTS_VOICE: ${VOLCENGINE_TTS_VOICE:-zh_female_xiaohe_uranus_bigtts}
+      VOLCENGINE_TTS_TIMEOUT: ${VOLCENGINE_TTS_TIMEOUT:-120}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimaxi.com}
+      MINIMAX_VIDEO_MODEL: ${MINIMAX_VIDEO_MODEL:-MiniMax-H3}
+      MINIMAX_VIDEO_RESOLUTION: ${MINIMAX_VIDEO_RESOLUTION:-1080P}
+      MINIMAX_VIDEO_POLL_INTERVAL: ${MINIMAX_VIDEO_POLL_INTERVAL:-10}
+      MINIMAX_VIDEO_TIMEOUT: ${MINIMAX_VIDEO_TIMEOUT:-900}
+      SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
+      SEEDANCE_BASE_URL: ${SEEDANCE_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      SEEDANCE_VIDEO_MODEL: ${SEEDANCE_VIDEO_MODEL:-doubao-seedance-2-0-260128}
+      SEEDANCE_TIMEOUT: ${SEEDANCE_TIMEOUT:-180}
+      SEEDANCE_POLL_INTERVAL: ${SEEDANCE_POLL_INTERVAL:-10}
+      SEEDANCE_VIDEO_TIMEOUT: ${SEEDANCE_VIDEO_TIMEOUT:-900}
+      SEEDANCE_VIDEO_RESOLUTION: ${SEEDANCE_VIDEO_RESOLUTION:-720p}
+      SEEDREAM_API_KEY: ${SEEDREAM_API_KEY:-}
+      SEEDREAM_BASE_URL: ${SEEDREAM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      SEEDREAM_IMAGE_MODEL: ${SEEDREAM_IMAGE_MODEL:-doubao-seedream-4-5-251128}
+      SEEDREAM_TIMEOUT: ${SEEDREAM_TIMEOUT:-180}
+      SEEDREAM_IMAGE_SIZE: ${SEEDREAM_IMAGE_SIZE:-2K}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      BACKEND_CORS_ORIGINS: '["http://localhost:5173","http://localhost:8000"]'
+    ports:
+      - "8000:8000"
+    volumes:
+      - storage_data:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ---------- Celery Worker ----------
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fastvideo-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://fastvideo:fastvideo@postgres:5432/fastvideo
+      REDIS_URL: redis://redis:6379/0
+      USE_CELERY: "true"
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: fastvideo
+      MINIO_SECRET_KEY: fastvideo_secret
+      MINIO_BUCKET: fastvideo
+      AI_LLM_PROVIDER: ${AI_LLM_PROVIDER:-disabled}
+      AI_LLM_BASE_URL: ${AI_LLM_BASE_URL:-}
+      AI_LLM_MODEL: ${AI_LLM_MODEL:-deepseek-v4-flash}
+      AI_IMAGE_PROVIDER: ${AI_IMAGE_PROVIDER:-seedream}
+      AI_IMAGE_BASE_URL: ${AI_IMAGE_BASE_URL:-}
+      AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-doubao-seedream-4-5-251128}
+      AI_VIDEO_PROVIDER: ${AI_VIDEO_PROVIDER:-seedance}
+      AI_VIDEO_BASE_URL: ${AI_VIDEO_BASE_URL:-}
+      AI_VIDEO_MODEL: ${AI_VIDEO_MODEL:-doubao-seedance-2-0-260128}
+      AI_TTS_PROVIDER: ${AI_TTS_PROVIDER:-disabled}
+      VOLCENGINE_TTS_API_KEY: ${VOLCENGINE_TTS_API_KEY:-}
+      VOLCENGINE_TTS_BASE_URL: ${VOLCENGINE_TTS_BASE_URL:-https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse}
+      VOLCENGINE_TTS_RESOURCE_ID: ${VOLCENGINE_TTS_RESOURCE_ID:-seed-tts-2.0}
+      VOLCENGINE_TTS_VOICE: ${VOLCENGINE_TTS_VOICE:-zh_female_xiaohe_uranus_bigtts}
+      VOLCENGINE_TTS_TIMEOUT: ${VOLCENGINE_TTS_TIMEOUT:-120}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimaxi.com}
+      MINIMAX_VIDEO_MODEL: ${MINIMAX_VIDEO_MODEL:-MiniMax-H3}
+      MINIMAX_VIDEO_RESOLUTION: ${MINIMAX_VIDEO_RESOLUTION:-1080P}
+      MINIMAX_VIDEO_POLL_INTERVAL: ${MINIMAX_VIDEO_POLL_INTERVAL:-10}
+      MINIMAX_VIDEO_TIMEOUT: ${MINIMAX_VIDEO_TIMEOUT:-900}
+      SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
+      SEEDANCE_BASE_URL: ${SEEDANCE_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      SEEDANCE_VIDEO_MODEL: ${SEEDANCE_VIDEO_MODEL:-doubao-seedance-2-0-260128}
+      SEEDANCE_TIMEOUT: ${SEEDANCE_TIMEOUT:-180}
+      SEEDANCE_POLL_INTERVAL: ${SEEDANCE_POLL_INTERVAL:-10}
+      SEEDANCE_VIDEO_TIMEOUT: ${SEEDANCE_VIDEO_TIMEOUT:-900}
+      SEEDANCE_VIDEO_RESOLUTION: ${SEEDANCE_VIDEO_RESOLUTION:-720p}
+      SEEDREAM_API_KEY: ${SEEDREAM_API_KEY:-}
+      SEEDREAM_BASE_URL: ${SEEDREAM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      SEEDREAM_IMAGE_MODEL: ${SEEDREAM_IMAGE_MODEL:-doubao-seedream-4-5-251128}
+      SEEDREAM_TIMEOUT: ${SEEDREAM_TIMEOUT:-180}
+      SEEDREAM_IMAGE_SIZE: ${SEEDREAM_IMAGE_SIZE:-2K}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+    volumes:
+      - storage_data:/app/data
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+
+  # ---------- 前端 ----------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fastvideo-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      VITE_API_TARGET: http://api:8000
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  storage_data:

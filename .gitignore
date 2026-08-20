@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-local/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.db
+*.sqlite3
+
+# Node
+node_modules/
+dist/
+build/
+*.local
+
+# 环境变量（禁止提交真实密钥）
+.env
+.env.*
+!.env.example
+
+# 运行时数据
+backend/data/
+backend/app/data/
+uploads/
+exports/
+static/generated/
+
+# 归档与临时文件
+*.zip
+*.tar
+*.tar.gz
+*.rar
+zitG1nIE
+
+# 示例应用生成产物（openevai_img2video）
+openevai_img2video/videos/
+openevai_img2video/frames/
+openevai_img2video/thumbs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 日志
+*.log
+logs/
