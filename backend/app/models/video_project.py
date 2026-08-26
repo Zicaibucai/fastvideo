@@ -6,17 +6,19 @@ from sqlalchemy import ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import StatusValidationMixin, VideoProjectStatus
 
 
-class VideoProject(BaseModel):
+class VideoProject(StatusValidationMixin, BaseModel):
     __tablename__ = "video_projects"
+    VALID_STATUSES = frozenset(item.value for item in VideoProjectStatus)
 
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(32), default="draft", nullable=False, index=True
+        String(32), default=VideoProjectStatus.DRAFT.value, nullable=False, index=True
     )  # draft | composing | success | failed
 
     width: Mapped[int] = mapped_column(default=1920, nullable=False)

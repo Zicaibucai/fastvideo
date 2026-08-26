@@ -6,10 +6,12 @@ from sqlalchemy import ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import StatusValidationMixin, TaskStatus
 
 
-class RenderTask(BaseModel):
+class RenderTask(StatusValidationMixin, BaseModel):
     __tablename__ = "render_tasks"
+    VALID_STATUSES = frozenset(item.value for item in TaskStatus)
 
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=True
@@ -21,7 +23,7 @@ class RenderTask(BaseModel):
         String(32), nullable=False, index=True
     )  # parse_document | gen_narration | gen_image | gen_video | gen_tts | tts_batch | compose_video | export
     status: Mapped[str] = mapped_column(
-        String(32), default="queued", nullable=False, index=True
+        String(32), default=TaskStatus.QUEUED.value, nullable=False, index=True
     )  # queued | running | success | failed | retry | cancelled
 
     # 批量父任务：子任务引用父任务 id（配音批量生成用）

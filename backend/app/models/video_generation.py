@@ -17,6 +17,7 @@ from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import StatusValidationMixin, TaskStatus
 
 
 class VideoGenerationTemplate(BaseModel):
@@ -134,8 +135,9 @@ class VideoTemplateDraft(BaseModel):
     preview_asset = relationship("Asset", foreign_keys=[preview_asset_id], lazy="selectin")
 
 
-class VideoGenerationJob(BaseModel):
+class VideoGenerationJob(StatusValidationMixin, BaseModel):
     __tablename__ = "video_generation_jobs"
+    VALID_STATUSES = frozenset(item.value for item in TaskStatus)
     __table_args__ = (
         UniqueConstraint("project_id", "idempotency_key", name="uq_video_jobs_project_idempotency"),
     )
@@ -183,7 +185,7 @@ class VideoGenerationJob(BaseModel):
     provider_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(
-        String(16), default="queued", nullable=False, index=True
+        String(16), default=TaskStatus.QUEUED.value, nullable=False, index=True
     )  # queued|running|success|failed|cancelled
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

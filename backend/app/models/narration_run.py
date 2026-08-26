@@ -8,15 +8,17 @@ from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import NarrationRunStatus, StatusValidationMixin, TaskStatus
 
 
-class NarrationRun(BaseModel):
+class NarrationRun(StatusValidationMixin, BaseModel):
     __tablename__ = "narration_runs"
+    VALID_STATUSES = frozenset(item.value for item in NarrationRunStatus)
 
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    status: Mapped[str] = mapped_column(String(32), default="created", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default=NarrationRunStatus.CREATED.value, nullable=False, index=True)
     generation_mode: Mapped[str] = mapped_column(String(32), default="multi_stage", nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), default="evidence-v1", nullable=False)
     params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -32,8 +34,9 @@ class NarrationRun(BaseModel):
     evidence = relationship("NarrationEvidence", back_populates="run", cascade="all, delete-orphan")
 
 
-class NarrationEvidenceBatch(BaseModel):
+class NarrationEvidenceBatch(StatusValidationMixin, BaseModel):
     __tablename__ = "narration_evidence_batches"
+    VALID_STATUSES = frozenset(item.value for item in TaskStatus)
 
     run_id: Mapped[str] = mapped_column(
         ForeignKey("narration_runs.id", ondelete="CASCADE"), index=True, nullable=False
@@ -48,7 +51,7 @@ class NarrationEvidenceBatch(BaseModel):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     cache_key: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     content_chars: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), default=TaskStatus.QUEUED.value, nullable=False, index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -6,10 +6,12 @@ from sqlalchemy import ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import StatusValidationMixin, TaskStatus
 
 
-class ExportTask(BaseModel):
+class ExportTask(StatusValidationMixin, BaseModel):
     __tablename__ = "export_tasks"
+    VALID_STATUSES = frozenset(item.value for item in TaskStatus)
 
     video_project_id: Mapped[str | None] = mapped_column(
         ForeignKey("video_projects.id", ondelete="CASCADE"), index=True, nullable=True
@@ -21,7 +23,7 @@ class ExportTask(BaseModel):
     # 导出模式：demo | formal
     mode: Mapped[str] = mapped_column(String(16), default="demo", nullable=False)
     status: Mapped[str] = mapped_column(
-        String(32), default="queued", nullable=False, index=True
+        String(32), default=TaskStatus.QUEUED.value, nullable=False, index=True
     )  # queued | running | success | failed | retry | cancelled
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

@@ -10,10 +10,12 @@ from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text, UniqueCon
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import StatusValidationMixin, TaskStatus
 
 
-class RenderJob(BaseModel):
+class RenderJob(StatusValidationMixin, BaseModel):
     __tablename__ = "render_jobs"
+    VALID_STATUSES = frozenset(item.value for item in TaskStatus)
     __table_args__ = (
         UniqueConstraint("project_id", "idempotency_key", name="uq_render_jobs_project_idempotency"),
     )
@@ -57,7 +59,7 @@ class RenderJob(BaseModel):
 
     # 任务状态
     status: Mapped[str] = mapped_column(
-        String(16), default="queued", nullable=False, index=True
+        String(16), default=TaskStatus.QUEUED.value, nullable=False, index=True
     )  # queued|running|success|failed|cancelled
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
