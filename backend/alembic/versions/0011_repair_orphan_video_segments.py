@@ -17,7 +17,7 @@ def upgrade() -> None:
     # 这些位置无法安全映射到新分镜，只能归档并清空悬空引用；对应素材和导出文件不删除。
     bind.execute(sa.text(
         "UPDATE video_segments "
-        "SET storyboard_shot_id = NULL, render_status = 'skipped', needs_rebuild = 1 "
+        "SET storyboard_shot_id = NULL, render_status = 'skipped', needs_rebuild = TRUE "
         "WHERE storyboard_shot_id IS NOT NULL "
         "AND storyboard_shot_id NOT IN (SELECT id FROM storyboard_shots)"
     ))

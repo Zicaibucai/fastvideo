@@ -22,7 +22,8 @@ from app.models.base import BaseModel
 class VideoGenerationTemplate(BaseModel):
     __tablename__ = "video_generation_templates"
 
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 系统模板名称可能直接来自带描述性的中文镜头文案，不能用 128 字符硬截断。
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 适用模式：["image_to_video"] | ["first_last_frame_video"] | 两者
     applicable_modes: Mapped[list | None] = mapped_column(JSON, nullable=True)
