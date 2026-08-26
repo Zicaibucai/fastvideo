@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -11,6 +9,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.exceptions import NotFoundError
 from app.models.asset import Asset
+from app.models.base import utc_now_iso
 from app.models.audio_version import AudioVersion
 from app.models.project import Project
 from app.models.render_job import RenderJob
@@ -78,7 +77,7 @@ def _select_visual_version(
         history.append({
             "render_version_id": previous,
             "image_asset_id": shot.image_asset_id,
-            "selected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "selected_at": utc_now_iso(),
             "selected_by": username,
         })
         shot.visual_history = history[-50:]
@@ -96,7 +95,7 @@ def _select_visual_version(
         ).update({"is_selected": False}, synchronize_session=False)
     version.is_selected = True
     version.selected_by = username
-    version.selected_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    version.selected_at = utc_now_iso()
 
     affected = []
     segments = (
@@ -412,7 +411,7 @@ def update_narration_document(
                 "narration": item.narration,
                 "visual_prompt": shot.visual_prompt,
                 "visual_type": shot.visual_type,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at": utc_now_iso(),
                 "source": "manual",
             }
         )
@@ -514,7 +513,7 @@ def update_shot(
                 "revision": revision,
                 "narration": data["narration"],
                 "visual_prompt": data.get("visual_prompt", shot.visual_prompt),
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at": utc_now_iso(),
                 "source": "manual",
             }
         )

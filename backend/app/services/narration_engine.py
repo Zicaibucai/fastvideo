@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from app.adapters.factory import get_llm_adapter
 from app.core.database import SessionLocal
 from app.core.logging import get_logger
+from app.models.base import utc_now_iso
 from app.models.extracted_fact import ExtractedFact
 from app.models.document_chunk import DocumentChunk
 from app.models.document_page import DocumentPage
@@ -1250,7 +1251,7 @@ def resegment_storyboard(params: dict[str, Any]) -> dict[str, Any]:
                             "narration": item.narration,
                             "visual_prompt": item.visualDescription or existing.visual_prompt,
                             "visual_type": item.visualType,
-                            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "created_at": utc_now_iso(),
                             "source": "ai_resegment",
                         }
                     )
@@ -1292,7 +1293,7 @@ def resegment_storyboard(params: dict[str, Any]) -> dict[str, Any]:
                             "narration": item.narration,
                             "visual_prompt": item.visualDescription,
                             "visual_type": item.visualType,
-                            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "created_at": utc_now_iso(),
                             "source": "ai_resegment",
                         }
                     ],
@@ -1420,7 +1421,7 @@ def _persist_storyboard_output(db, params: dict[str, Any], context: dict, parsed
         shot.is_active = True
         shot.revision = next_revision
         history = list(shot.versions or [])
-        history.append({"revision": next_revision, "narration": shot_data.narration, "visual_prompt": shot_data.imagePrompt or shot_data.visualDescription, "visual_type": shot_data.visualType, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "source": "ai" if source.startswith("ai") else source})
+        history.append({"revision": next_revision, "narration": shot_data.narration, "visual_prompt": shot_data.imagePrompt or shot_data.visualDescription, "visual_type": shot_data.visualType, "created_at": utc_now_iso(), "source": "ai" if source.startswith("ai") else source})
         shot.versions = history[-20:]
         db.add(shot)
         created.append(shot)
@@ -1752,7 +1753,7 @@ def regenerate_single_shot(params: dict[str, Any]) -> dict[str, Any]:
                 "narration": narration,
                 "visual_prompt": shot.visual_prompt,
                 "visual_type": shot.visual_type,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "created_at": utc_now_iso(),
                 "source": "ai",
             }
         )

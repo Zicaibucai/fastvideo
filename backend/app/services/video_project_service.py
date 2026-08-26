@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.storage import storage
 from app.models.asset import Asset
+from app.models.base import utc_now_iso
 from app.models.audio_version import AudioVersion
 from app.models.export_task import ExportTask
 from app.models.extracted_fact import ExtractedFact
@@ -612,7 +613,7 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
         seg.input_hash = compute_segment_input_hash(db, vp, seg)
         seg.needs_rebuild = False
         seg.error_message = None
-        seg.rendered_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        seg.rendered_at = utc_now_iso()
         db.commit()
 
     return {
@@ -1082,7 +1083,7 @@ def build_export_report(db: Session, vp: VideoProject, mode: str, preflight_resu
         "video_project_id": vp.id,
         "name": vp.name,
         "mode": mode,
-        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": utc_now_iso(),
         "total_duration_seconds": round(total, 3),
         "segment_count": len(segs),
         "width": vp.width,

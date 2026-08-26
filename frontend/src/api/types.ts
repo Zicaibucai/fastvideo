@@ -12,7 +12,31 @@ export type TaskStatus =
   | 'cancelled'
   | (string & {})
 
+/** JSON object accepted by API payloads. Unknown values keep response boundaries honest. */
 export type JsonObject = Record<string, unknown>
+
+export interface AssetMeta extends JsonObject {
+  category?: string
+  version?: string | number
+  is_current?: boolean
+}
+
+export interface VideoPromptRecipe extends JsonObject {
+  category?: string
+  negative_prompt?: string
+  generation_modes?: string[]
+  recommended?: {
+    duration?: number
+    aspect_ratio?: string
+    resolution?: string
+  }
+}
+
+export interface RenderTaskResult extends JsonObject {
+  stage_summary?: {
+    run_id?: string
+  }
+}
 
 export interface VideoProvider {
   provider: string
@@ -21,6 +45,79 @@ export interface VideoProvider {
   capabilities?: Record<string, boolean>
   default_model?: string
   models?: string[]
+}
+
+export interface VoiceDescriptor extends JsonObject {
+  id: string
+  name: string
+  gender?: string
+  provider?: string
+}
+
+export interface VoiceProviderInfo extends JsonObject {
+  provider: string
+  available: boolean
+  capabilities: Record<string, boolean>
+  model?: string
+  is_mock: boolean
+  voices?: VoiceDescriptor[]
+}
+
+export interface RenderProviderInfo extends JsonObject {
+  provider: string
+  available: boolean
+  capabilities: Record<string, boolean>
+  model?: string
+  is_mock: boolean
+}
+
+export interface ReferencingShot {
+  id: string
+  sequence: number
+  title?: string
+  narration?: string
+  page?: number | null
+}
+
+export interface FactCandidate extends JsonObject {
+  id?: string
+  document_id?: string
+  page_number?: number
+  fact_value?: string
+  unit?: string
+  document_name?: string
+  scope?: string
+}
+
+export interface WaveformData extends JsonObject {
+  points?: number[]
+}
+
+export interface MusicTrack extends JsonObject {
+  asset_id: string
+  name?: string
+  volume?: number
+  loop?: boolean
+}
+
+export interface VideoOverlayConfig extends JsonObject {
+  text?: string
+  sub_text?: string
+  duration?: number
+}
+
+export interface PronunciationTestResult {
+  original_text: string
+  normalized_text: string
+  pronunciation_snapshot: JsonObject[]
+  matched_rules: JsonObject[]
+  warnings: string[]
+}
+
+export interface PronunciationImportResult extends JsonObject {
+  created: number
+  skipped?: number
+  conflicts?: number
 }
 
 export interface User {
@@ -66,7 +163,7 @@ export interface SourceDocument {
   doc_type: string
   parse_status: string
   parse_error?: string
-  extracted_params?: Record<string, any>
+  extracted_params?: JsonObject
   sha256?: string
   mime_type?: string
   is_duplicate?: boolean
@@ -104,7 +201,7 @@ export interface DocumentPage {
   extraction_method: string
   ocr_status: string
   confidence?: number
-  metadata_json?: Record<string, any>
+  metadata_json?: JsonObject
   created_at: string
 }
 
@@ -162,7 +259,7 @@ export interface ExtractedFact {
   verification_status: string
   confirmed_by?: string
   confirmed_at?: string
-  candidates?: any[]
+  candidates?: FactCandidate[]
   created_at: string
 }
 
@@ -280,7 +377,7 @@ export interface Asset {
   duration_seconds?: number
   prompt?: string
   tags?: string[]
-  meta?: Record<string, any>
+  meta?: AssetMeta
   project_stage?: string
   created_at: string
 }
@@ -290,14 +387,14 @@ export interface RenderTask {
   project_id?: string
   shot_id?: string
   task_type: string
-  params?: Record<string, any>
+  params?: JsonObject
   status: TaskStatus
   progress: number
   attempts: number
   max_attempts: number
   message?: string
   error_message?: string
-  result?: Record<string, any>
+  result?: RenderTaskResult
   created_at: string
   updated_at: string
 }
@@ -375,7 +472,7 @@ export interface AudioVersion {
   version_number: number
   original_text_snapshot?: string
   normalized_text_snapshot?: string
-  pronunciation_snapshot?: any
+  pronunciation_snapshot?: JsonObject
   narration_hash?: string
   provider: string
   model_name?: string
@@ -399,11 +496,11 @@ export interface AudioVersion {
   wav_url?: string
   mp3_url?: string
   subtitle_data: SubtitleSegment[]
-  waveform_data?: any
-  provider_metadata?: any
-  quality_metrics?: any
+  waveform_data?: WaveformData
+  provider_metadata?: JsonObject
+  quality_metrics?: JsonObject
   quality_status: string
-  authorization_snapshot?: any
+  authorization_snapshot?: JsonObject
   is_mock: boolean
   is_stale: boolean
   stale_reason?: string
@@ -425,8 +522,8 @@ export interface VoiceJob {
   task_type: string
   status: TaskStatus
   progress: number
-  params?: any
-  result?: any
+  params?: JsonObject
+  result?: JsonObject
   error_message?: string
   message?: string
   children?: VoiceJob[]
@@ -470,14 +567,14 @@ export interface VideoProject {
   fps: number
   duration_seconds?: number
   timeline?: TimelineItem[]
-  subtitle_style?: any
-  music_tracks?: any[]
-  logo_config?: any
-  open_config?: any
-  close_config?: any
+  subtitle_style?: JsonObject
+  music_tracks?: MusicTrack[]
+  logo_config?: JsonObject
+  open_config?: VideoOverlayConfig
+  close_config?: VideoOverlayConfig
   brand_color: string
   export_mode: string
-  timeline_snapshot?: any
+  timeline_snapshot?: JsonObject
   output_key?: string
   output_url?: string
   watermark_text?: string
@@ -555,7 +652,7 @@ export interface ExportTask {
   file_size: number
   duration_seconds?: number
   error_message?: string
-  timeline_snapshot?: any
+  timeline_snapshot?: JsonObject
   created_at: string
 }
 
@@ -675,10 +772,10 @@ export interface RenderVersion {
   model_name?: string
   seed?: number
   generation_type: string
-  prompt_snapshot?: any
-  negative_prompt_snapshot?: any
-  parameter_snapshot?: any
-  quality_metrics?: any
+  prompt_snapshot?: JsonObject
+  negative_prompt_snapshot?: JsonObject
+  parameter_snapshot?: JsonObject
+  quality_metrics?: JsonObject
   quality_status: string
   is_selected: boolean
   selected_by?: string
@@ -715,7 +812,7 @@ export interface VideoGenerationTemplate {
   created_at: string
   category?: string
   tags?: string[]
-  prompt_recipe?: Record<string, any>
+  prompt_recipe?: VideoPromptRecipe
   preview_asset_id?: string
   cover_asset_id?: string
   preview_file_key?: string
@@ -771,7 +868,7 @@ export interface VideoGenerationJob {
     warnings?: string[]
     engineering_review?: { status?: string; checks?: { name: string; status: string }[]; note?: string }
   }
-  parameter_snapshot?: any
+  parameter_snapshot?: JsonObject
   created_by?: string
   started_at?: string
   completed_at?: string
@@ -785,7 +882,7 @@ export interface VideoGenerationTaskCreate {
   last_frame_asset_id?: string
   reference_asset_ids?: string[]
   template_id?: string | null
-  prompt_recipe?: JsonObject
+  prompt_recipe?: VideoPromptRecipe
   provider?: string
   model_name?: string
   positive_prompt: string
@@ -811,9 +908,9 @@ export interface VideoGenerationVersion {
   model_name?: string
   seed?: number
   generation_mode: string
-  prompt_snapshot?: any
-  negative_prompt_snapshot?: any
-  parameter_snapshot?: any
+  prompt_snapshot?: JsonObject
+  negative_prompt_snapshot?: JsonObject
+  parameter_snapshot?: JsonObject
   first_frame_asset_id?: string
   last_frame_asset_id?: string
   reference_asset_ids?: string[]
@@ -868,7 +965,7 @@ export interface VideoTemplateDraft {
   reference_frame_file_keys?: string[]
   reference_frame_asset_ids?: string[]
   reference_frame_times?: number[]
-  prompt_recipe?: Record<string, any>
+  prompt_recipe?: VideoPromptRecipe
   analysis_warnings?: string[]
   intent?: string
   preview_job_id?: string

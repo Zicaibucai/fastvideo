@@ -32,6 +32,7 @@ import type {
   VideoGenerationVersion,
   VideoGenerationTaskCreate,
   VideoProvider,
+  JsonObject,
   ReferenceImage,
   VideoProject,
   VideoSegment,
@@ -39,6 +40,12 @@ import type {
   VoiceJob,
   VoiceSummary,
   VoiceTemplate,
+  VoiceProviderInfo,
+  VoiceDescriptor,
+  RenderProviderInfo,
+  ReferencingShot,
+  PronunciationTestResult,
+  PronunciationImportResult,
 } from './types'
 
 // ---------- 认证 ----------
@@ -52,7 +59,7 @@ export const authApi = {
   updateMe: (payload: { username?: string; full_name?: string; company?: string; password?: string }) =>
     api.patch<User>('/auth/me', payload),
   aiConfiguration: () => api.get<import('./types').AIConfiguration>('/settings/ai'),
-  saveAiConfiguration: (payload: { providers: Record<string, any>; stages: Record<string, any> }) =>
+  saveAiConfiguration: (payload: { providers: JsonObject; stages: JsonObject }) =>
     api.put<import('./types').AIConfiguration>('/settings/ai', payload),
 }
 
@@ -138,7 +145,7 @@ export const documentApi = {
     api.get<SearchResult[]>(`/projects/${projectId}/documents/search`, { params: { q } }),
   reparse: (projectId: string, docId: string) =>
     api.post<SourceDocument>(`/projects/${projectId}/documents/${docId}/parse`),
-  updateParams: (projectId: string, docId: string, params: Record<string, any>) =>
+  updateParams: (projectId: string, docId: string, params: JsonObject) =>
     api.put<SourceDocument>(`/projects/${projectId}/documents/${docId}/params`, { params }),
   update: (projectId: string, docId: string, payload: { title?: string; doc_type?: string }) =>
     api.patch<SourceDocument>(`/projects/${projectId}/documents/${docId}`, payload),
@@ -157,7 +164,7 @@ export const readerApi = {
   pageSummary: (projectId: string, docId: string) =>
     api.get<Record<string, number>>(`/projects/${projectId}/reader/${docId}/page-summary`),
   referencingShots: (projectId: string, docId: string) =>
-    api.get<any[]>(`/projects/${projectId}/reader/${docId}/referencing-shots`),
+    api.get<ReferencingShot[]>(`/projects/${projectId}/reader/${docId}/referencing-shots`),
 }
 
 // ---------- 工程参数台账 ----------
@@ -239,7 +246,7 @@ export const storyboardApi = {
     payload: { target_shot_count: number; chars_per_minute?: number; instructions?: string },
   ) => api.post<{ task_id: string; status: string }>(`/projects/${projectId}/storyboard/resegment`, payload),
   evidenceRun: (projectId: string, runId: string) =>
-    api.get<Record<string, any>>(`/projects/${projectId}/storyboard/evidence/runs/${runId}`),
+    api.get<JsonObject>(`/projects/${projectId}/storyboard/evidence/runs/${runId}`),
   approveEvidence: (projectId: string, runId: string, evidenceIds?: string[], continueGeneration = false) =>
     api.post<{ run_id: string; approved_count: number; status: string; task_id?: string }>(
       `/projects/${projectId}/storyboard/evidence/runs/${runId}/approve`,
@@ -257,7 +264,7 @@ export const assetApi = {
     if (name) form.append('name', name)
     return api.post<Asset>(`/projects/${projectId}/assets`, form)
   },
-  update: (projectId: string, assetId: string, payload: { name?: string; tags?: string[]; meta?: Record<string, any> }) =>
+  update: (projectId: string, assetId: string, payload: { name?: string; tags?: string[]; meta?: JsonObject }) =>
     api.patch<Asset>(`/projects/${projectId}/assets/${assetId}`, payload),
   remove: (projectId: string, assetId: string) =>
     api.delete(`/projects/${projectId}/assets/${assetId}`),
@@ -286,9 +293,9 @@ export const voiceApi = {
       shot_id: shotId,
       voice_template_id: voiceTemplateId,
     }),
-  generate: (projectId: string, payload: Record<string, any>) =>
+  generate: (projectId: string, payload: JsonObject) =>
     api.post<{ task_id: string; status: string }>(`/projects/${projectId}/voice/generate`, payload),
-  batch: (projectId: string, payload: Record<string, any>) =>
+  batch: (projectId: string, payload: JsonObject) =>
     api.post<{ task_id: string; status: string; total: number }>(`/projects/${projectId}/voice/batch`, payload),
   jobs: (projectId: string, params?: { status?: string; shot_id?: string }) =>
     api.get<VoiceJob[]>(`/projects/${projectId}/voice/jobs`, { params }),
@@ -324,10 +331,10 @@ export const voiceApi = {
 
 // ---------- 全局配音 Provider / 模板 ----------
 export const voiceProviderApi = {
-  list: () => api.get<any[]>('/voice/providers'),
+  list: () => api.get<VoiceProviderInfo[]>('/voice/providers'),
   capabilities: (provider: string) =>
     api.get<Record<string, boolean>>(`/voice/providers/${provider}/capabilities`),
-  voices: (provider: string) => api.get<any[]>(`/voice/providers/${provider}/voices`),
+  voices: (provider: string) => api.get<VoiceDescriptor[]>(`/voice/providers/${provider}/voices`),
   speakingStyles: () => api.get<string[]>('/voice/speaking-styles'),
 }
 
@@ -353,12 +360,12 @@ export const pronunciationApi = {
   remove: (projectId: string, ruleId: string) =>
     api.delete(`/projects/${projectId}/pronunciations/${ruleId}`),
   test: (projectId: string, text: string) =>
-    api.post<{ original_text: string; normalized_text: string; pronunciation_snapshot: any[]; matched_rules: any[]; warnings: string[] }>(
+    api.post<PronunciationTestResult>(
       `/projects/${projectId}/pronunciations/test`,
       { text },
     ),
-  importJson: (projectId: string, rules: any[]) =>
-    api.post(`/projects/${projectId}/pronunciations/import`, { rules }),
+  importJson: (projectId: string, rules: JsonObject[]) =>
+    api.post<PronunciationImportResult>(`/projects/${projectId}/pronunciations/import`, { rules }),
   exportJson: (projectId: string) => api.get(`/projects/${projectId}/pronunciations/export`),
 }
 
@@ -383,7 +390,7 @@ export async function downloadVoiceFile(projectId: string, kind: 'wav' | 'mp3' |
 // ---------- 视频工程与导出 ----------
 export const videoApi = {
   list: (projectId: string) => api.get<VideoProject[]>(`/projects/${projectId}/video-projects`),
-  create: (projectId: string, payload: Record<string, any>) =>
+  create: (projectId: string, payload: JsonObject) =>
     api.post<VideoProject>(`/projects/${projectId}/video-projects`, {
       project_id: projectId,
       ...payload,
@@ -402,7 +409,7 @@ export const videoApi = {
   // Phase 5：分段
   syncStoryboard: (id: string) => api.post(`/video-projects/${id}/sync-storyboard`),
   segments: (id: string) => api.get<VideoSegment[]>(`/video-projects/${id}/segments`),
-  updateSegment: (id: string, segId: string, payload: Record<string, any>) =>
+  updateSegment: (id: string, segId: string, payload: JsonObject) =>
     api.patch<VideoSegment>(`/video-projects/${id}/segments/${segId}`, payload),
   reorderSegments: (id: string, segmentIds: string[]) =>
     api.post<VideoSegment[]>(`/video-projects/${id}/segments/reorder`, { segment_ids: segmentIds }),
@@ -473,7 +480,7 @@ export const renderPresetApi = {
 export const renderApi = {
   enums: () => api.get<{ source_softwares: string[]; camera_angles: string[] }>('/render/enums'),
   providers: (projectId: string) =>
-    api.get<any[]>(`/projects/${projectId}/render/providers`),
+    api.get<RenderProviderInfo[]>(`/projects/${projectId}/render/providers`),
   providerCapabilities: (projectId: string, provider: string) =>
     api.get<Record<string, boolean>>(`/projects/${projectId}/render/providers/${provider}/capabilities`),
   uploadSourceImage: (
@@ -490,7 +497,7 @@ export const renderApi = {
   },
   listSourceImages: (projectId: string) =>
     api.get<SourceImage[]>(`/projects/${projectId}/render/source-images`),
-  createTask: (projectId: string, payload: Record<string, any>) =>
+  createTask: (projectId: string, payload: JsonObject) =>
     api.post<RenderJobTask>(`/projects/${projectId}/render/tasks`, payload),
   listTasks: (projectId: string, params?: { status?: string }) =>
     api.get<RenderJobTask[]>(`/projects/${projectId}/render/tasks`, { params }),
@@ -516,11 +523,11 @@ export const renderApi = {
       form,
     )
   },
-  inpaint: (projectId: string, payload: Record<string, any>) =>
+  inpaint: (projectId: string, payload: JsonObject) =>
     api.post<RenderJobTask>(`/projects/${projectId}/render/inpaint`, payload),
-  outpaint: (projectId: string, payload: Record<string, any>) =>
+  outpaint: (projectId: string, payload: JsonObject) =>
     api.post<RenderJobTask>(`/projects/${projectId}/render/outpaint`, payload),
-  upscale: (projectId: string, payload: Record<string, any>) =>
+  upscale: (projectId: string, payload: JsonObject) =>
     api.post<RenderJobTask>(`/projects/${projectId}/render/upscale`, payload),
 }
 
@@ -545,7 +552,7 @@ export const videoGenApi = {
     api.get<Record<string, boolean>>(`/projects/${projectId}/ai-video/providers/${provider}/capabilities`),
   referenceImages: (projectId: string) =>
     api.get<ReferenceImage[]>(`/projects/${projectId}/ai-video/reference-images`),
-  constraintCheck: (projectId: string, text: string, prompt_recipe?: Record<string, any> | null) =>
+  constraintCheck: (projectId: string, text: string, prompt_recipe?: JsonObject | null) =>
     api.post<{ conflicts: string[]; blocked: boolean }>(
       `/projects/${projectId}/ai-video/constraint-check`,
       { text, prompt_recipe: prompt_recipe || undefined },
@@ -553,7 +560,7 @@ export const videoGenApi = {
   compilePrompt: (projectId: string, payload: {
     positive_prompt: string
     negative_prompt?: string | null
-    prompt_recipe?: Record<string, any> | null
+    prompt_recipe?: JsonObject | null
     template_id?: string | null
     constraints_enabled?: boolean
     resolution?: string | null
@@ -564,7 +571,7 @@ export const videoGenApi = {
       provider_prompt: string
       provider_prompt_chars: number
       provider_prompt_limit: number
-      prompt_recipe?: Record<string, any> | null
+      prompt_recipe?: JsonObject | null
       conflicts: string[]
       blocked: boolean
     }>(`/projects/${projectId}/ai-video/compile-prompt`, payload),
@@ -582,7 +589,7 @@ export const videoGenApi = {
       generation_mode: 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
     },
   ) =>
-    api.post<{ prompt: string; name?: string; description?: string; negative_prompt?: string; mode: string; is_mock: boolean; provider?: string; model?: string; vision_used?: boolean; warnings?: string[]; recommended_duration?: number; recipe?: Record<string, any> }>(
+    api.post<{ prompt: string; name?: string; description?: string; negative_prompt?: string; mode: string; is_mock: boolean; provider?: string; model?: string; vision_used?: boolean; warnings?: string[]; recommended_duration?: number; recipe?: JsonObject }>(
       `/projects/${projectId}/ai-video/prompt-master`,
       payload,
     ),
@@ -614,7 +621,7 @@ export const videoGenApi = {
       intent,
       generation_mode: generationMode,
     }),
-  updateTemplateDraftRecipe: (projectId: string, draftId: string, payload: { name?: string; description?: string; prompt_recipe: Record<string, any> }) =>
+  updateTemplateDraftRecipe: (projectId: string, draftId: string, payload: { name?: string; description?: string; prompt_recipe: JsonObject }) =>
     api.patch<import('./types').VideoTemplateDraft>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/recipe`, payload),
   previewTemplateDraft: (projectId: string, draftId: string, payload?: { provider?: string; model_name?: string; duration?: number; aspect_ratio?: string; resolution?: string; structure_conflict_confirmed?: boolean }) =>
     api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/preview`, payload || {}),

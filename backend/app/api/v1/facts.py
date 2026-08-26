@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import time
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.exceptions import NotFoundError
+from app.models.base import utc_now_iso
 from app.models.extracted_fact import ExtractedFact
 from app.models.project import Project
 from app.models.source_document import SourceDocument
@@ -246,7 +245,7 @@ def confirm_fact(
             fact.unit = payload.unit
         fact.verification_status = "confirmed"
         fact.confirmed_by = current.username
-        fact.confirmed_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        fact.confirmed_at = utc_now_iso()
         fact.candidates = None
 
         # 只有已有稳定语义的同名候选才互相排除。全量数字候选共享
@@ -272,7 +271,7 @@ def confirm_fact(
         fact.verification_status = payload.status
         fact.confirmed_by = current.username if payload.status == "confirmed" else None
         fact.confirmed_at = (
-            time.strftime("%Y-%m-%d %H:%M:%S") if payload.status == "confirmed" else None
+            utc_now_iso() if payload.status == "confirmed" else None
         )
         if payload.status == "rejected":
             fact.candidates = None

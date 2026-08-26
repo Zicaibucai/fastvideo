@@ -10,10 +10,12 @@ from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
+from app.models.status import StatusValidationMixin, StoryboardShotStatus
 
 
-class StoryboardShot(BaseModel):
+class StoryboardShot(StatusValidationMixin, BaseModel):
     __tablename__ = "storyboard_shots"
+    VALID_STATUSES = frozenset(item.value for item in StoryboardShotStatus)
 
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False
@@ -67,7 +69,7 @@ class StoryboardShot(BaseModel):
     fact_check_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     status: Mapped[str] = mapped_column(
-        String(32), default="draft", nullable=False, index=True
+        String(32), default=StoryboardShotStatus.DRAFT.value, nullable=False, index=True
     )  # draft | ai_generating | ai_done | edited | failed
 
     # 分镜身份必须跨重生成保持稳定。旧版本不再删除，而是归档，供视频工程与素材绑定追溯。

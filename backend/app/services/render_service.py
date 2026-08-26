@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.storage import storage
 from app.models.asset import Asset
+from app.models.base import utc_now_iso
 from app.models.render_job import RenderJob
 from app.models.render_version import RenderVersion
 from app.models.storyboard_shot import StoryboardShot
@@ -136,7 +137,7 @@ def run_render_job(job_id: str) -> dict[str, Any]:
             return {"status": "cancelled"}
 
         job.status = "running"
-        job.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        job.started_at = utc_now_iso()
         job.progress = 10
         job.error_message = None
         db.commit()
@@ -288,7 +289,7 @@ def run_render_job(job_id: str) -> dict[str, Any]:
         # 全部为 failed 时任务标记为 success（生成完成）但返回 warnings
         job.status = "success"
         job.progress = 100
-        job.completed_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        job.completed_at = utc_now_iso()
         job.actual_cost = estimate_cost(job)
         db.commit()
 
@@ -312,7 +313,7 @@ def run_render_job(job_id: str) -> dict[str, Any]:
         if job:
             job.status = "failed"
             job.error_message = str(exc)[:2000]
-            job.completed_at = time.strftime("%Y-%m-%d %H:%M:%S")
+            job.completed_at = utc_now_iso()
             db.commit()
         raise
     finally:
@@ -390,7 +391,7 @@ def soft_delete_version(db: Session, project_id: str, version_id: str, user_name
     if referenced:
         raise RuntimeError("被引用版本不能删除")
 
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    now = utc_now_iso()
     version.is_deleted = True
     version.deleted_by = user_name
     version.deleted_at = now

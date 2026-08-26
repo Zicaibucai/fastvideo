@@ -30,12 +30,22 @@ class NarrationRunStatus(StrEnum):
     EVIDENCE_REVIEW = "evidence_review"
     EVIDENCE_FAILED = "evidence_failed"
     OUTLINE_GENERATING = "outline_generating"
+    OUTLINE_FAILED = "outline_failed"
     OUTLINE_REVIEW = "outline_review"
     DRAFTING = "drafting"
     DRAFTING_FAILED = "drafting_failed"
     QA = "qa"
     QA_FAILED = "qa_failed"
     COMPLETED = "completed"
+
+
+class StoryboardShotStatus(StrEnum):
+    DRAFT = "draft"
+    AI_GENERATING = "ai_generating"
+    AI_DONE = "ai_done"
+    EDITED = "edited"
+    FAILED = "failed"
+    ARCHIVED = "archived"
 
 
 class StatusValidationMixin:

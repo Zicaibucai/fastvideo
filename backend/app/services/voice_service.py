@@ -20,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import time
 import zipfile
 from datetime import datetime
 from typing import Any
@@ -30,6 +29,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.factory import get_tts_adapter
+from app.models.base import utc_now_iso
 from app.adapters.tts import CapabilityError
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -490,7 +490,7 @@ def _apply_selection(db: Session, shot: StoryboardShot, version: AudioVersion, u
         AudioVersion.is_selected.is_(True),
     ).update({"is_selected": False})
 
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    now = utc_now_iso()
     version.is_selected = True
     version.selected_by = user_name
     version.selected_at = now
@@ -580,7 +580,7 @@ def soft_delete_voice_version(
         raise VoiceError("配音版本不存在")
     if version.is_selected:
         raise VoiceError("该版本是当前正式配音，不能删除；请先选择其他正式版本。")
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    now = utc_now_iso()
     version.is_deleted = True
     version.deleted_by = user_name
     version.deleted_at = now
@@ -606,7 +606,7 @@ def mark_shot_narration_changed(
 
     shot.narration_prev_hash = old_hash or shot.narration_hash
     shot.narration_hash = new_hash
-    shot.narration_updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    shot.narration_updated_at = utc_now_iso()
 
     versions = (
         db.query(AudioVersion)

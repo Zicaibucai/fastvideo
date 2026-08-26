@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +14,16 @@ from app.core.database import Base
 
 def uuid_str() -> str:
     return str(uuid4())
+
+
+def utc_now() -> datetime:
+    """返回带 UTC 时区信息的当前时间，作为业务时间戳唯一入口。"""
+    return datetime.now(timezone.utc)
+
+
+def utc_now_iso() -> str:
+    """兼容历史 String 时间列的 ISO-8601 UTC 表示。"""
+    return utc_now().isoformat(timespec="seconds")
 
 
 class TimestampMixin:

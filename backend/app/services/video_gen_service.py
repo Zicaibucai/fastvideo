@@ -25,6 +25,7 @@ from app.core.exceptions import AIProviderError, NotFoundError
 from app.core.logging import get_logger
 from app.core.storage import storage
 from app.models.asset import Asset
+from app.models.base import utc_now_iso
 from app.models.video_segment import VideoSegment
 from app.models.video_project import VideoProject
 from app.models.project import Project
@@ -293,7 +294,7 @@ def run_video_job(job_id: str) -> dict[str, Any]:
             return {"status": "cancelled"}
 
         job.status = "running"
-        job.started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        job.started_at = utc_now_iso()
         job.progress = 10
         job.error_message = None
         db.commit()
@@ -512,7 +513,7 @@ def run_video_job(job_id: str) -> dict[str, Any]:
         job.result_asset_id = asset.id
         job.status = "success"
         job.progress = 100
-        job.completed_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        job.completed_at = utc_now_iso()
         job.elapsed_seconds = round(time.monotonic() - started, 2)
         db.commit()
 
@@ -530,7 +531,7 @@ def run_video_job(job_id: str) -> dict[str, Any]:
         if job:
             job.status = "failed"
             job.error_message = str(exc)[:2000]
-            job.completed_at = time.strftime("%Y-%m-%d %H:%M:%S")
+            job.completed_at = utc_now_iso()
             job.elapsed_seconds = round(time.monotonic() - started, 2)
             db.commit()
         raise
@@ -577,7 +578,7 @@ def select_version(db: Session, project_id: str, version_id: str, user_name: str
         )
     version.is_selected = True
     version.selected_by = user_name
-    version.selected_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    version.selected_at = utc_now_iso()
     db.commit()
     db.refresh(version)
     return version
@@ -600,7 +601,7 @@ def soft_delete_version(db: Session, project_id: str, version_id: str, user_name
         raise RuntimeError("该视频已被视频工程分段使用，请先解除分段引用再删除")
     version.is_deleted = True
     version.deleted_by = user_name
-    version.deleted_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    version.deleted_at = utc_now_iso()
     db.commit()
 
 
