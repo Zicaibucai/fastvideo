@@ -11,6 +11,7 @@ import io
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -820,6 +821,29 @@ def test_cancel_and_retry_workflow(client, project_id, auth_headers):
         headers=auth_headers,
     )
     assert cancel.json()["status"] in ("success", "cancelled")
+
+
+def test_concurrent_duplicate_clicks_share_one_video_job(client, project_id, auth_headers):
+    first = _upload_frame(client, project_id, auth_headers, "double-click.png", (70, 100, 130))
+    payload = {
+        "generation_mode": "image_to_video",
+        "first_frame_asset_id": first,
+        "positive_prompt": "并发幂等测试",
+        "idempotency_key": "concurrent-double-click-001",
+    }
+
+    def submit():
+        return client.post(
+            f"/api/v1/projects/{project_id}/ai-video/tasks",
+            json=payload,
+            headers=auth_headers,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _index: submit(), range(2)))
+
+    assert all(response.status_code == 202 for response in responses), [response.text for response in responses]
+    assert len({response.json()["id"] for response in responses}) == 1
 
 
 def test_enterprise_template_crud(client, project_id, auth_headers):
