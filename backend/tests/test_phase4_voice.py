@@ -307,6 +307,14 @@ def test_select_version_and_delete_blocked(client, project_id, auth_headers):
     ).json()
     assert [v["version_number"] for v in versions] == [2]
 
+    # 软删除 V1 后再次生成必须继续使用新版本号，不能复用已占用的 V2/V1。
+    _generate_and_wait(client, project_id, auth_headers, shot["id"], seed=22)
+    versions = client.get(
+        f"/api/v1/projects/{project_id}/storyboard/{shot['id']}/voice/versions",
+        headers=auth_headers,
+    ).json()
+    assert sorted(v["version_number"] for v in versions) == [2, 3]
+
 
 def test_restore_voice_version(client, project_id, auth_headers):
     shot = _make_shot(client, project_id, auth_headers)

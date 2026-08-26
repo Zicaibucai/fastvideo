@@ -1,5 +1,17 @@
 // 与后端 Schema 对齐的类型定义
 
+/** 后端任务状态的稳定边界；未知状态保留给向后兼容的 API 扩展。 */
+export type TaskStatus =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'retrying'
+  | 'success'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | (string & {})
+
 export interface User {
   id: string
   email: string
@@ -268,7 +280,7 @@ export interface RenderTask {
   shot_id?: string
   task_type: string
   params?: Record<string, any>
-  status: string
+  status: TaskStatus
   progress: number
   attempts: number
   max_attempts: number
@@ -400,7 +412,7 @@ export interface VoiceJob {
   shot_id?: string
   parent_task_id?: string
   task_type: string
-  status: string
+  status: TaskStatus
   progress: number
   params?: any
   result?: any
@@ -735,7 +747,7 @@ export interface VideoGenerationJob {
   generate_audio: boolean
   watermark: boolean
   provider_task_id?: string
-  status: string
+  status: TaskStatus
   progress: number
   error_message?: string
   elapsed_seconds?: number

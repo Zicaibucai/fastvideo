@@ -33,7 +33,7 @@ describe('TaskStatus', () => {
   })
 
   it('stops polling and ignores late responses after unmount', async () => {
-    detail.mockResolvedValue({ data: task })
+    detail.mockResolvedValue({ data: task } as Awaited<ReturnType<typeof taskApi.detail>>)
     const { unmount } = renderHook(() => useTaskPolling('task-1', undefined, 100))
 
     await act(async () => {

@@ -1,6 +1,11 @@
 import axios from 'axios'
 import { message } from 'antd'
 
+type ValidationErrorItem = {
+  loc?: Array<string | number>
+  msg?: string
+}
+
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 300000, // 长任务可能耗时较长
@@ -18,7 +23,9 @@ api.interceptors.response.use(
     const data = error.response?.data
     const validationErrors = data?.detail?.errors
     const validationMessage = Array.isArray(validationErrors)
-      ? validationErrors.map((item: any) => `${item.loc?.join('.') || '参数'}: ${item.msg}`).join('；')
+      ? validationErrors
+        .map((item: ValidationErrorItem) => `${item.loc?.join('.') || '参数'}: ${item.msg || '无效值'}`)
+        .join('；')
       : ''
     const msg = validationMessage || data?.message || error.message || '请求失败'
     if (status === 401) {
