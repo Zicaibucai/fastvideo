@@ -11,7 +11,6 @@ import {
   Segmented,
   Divider,
   Spin,
-  Alert,
   Descriptions,
   Select,
   Badge,
@@ -142,10 +141,11 @@ export default function DocumentReader() {
             )}
           </Space>
           <pre
+            className="reader-page-text"
             style={{
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              background: '#fafafa',
+              background: '#F8FAFC',
               padding: 16,
               borderRadius: 8,
               maxHeight: 560,
@@ -157,15 +157,6 @@ export default function DocumentReader() {
           >
             {currentPageData.cleaned_text || currentPageData.raw_text || '（本页无文本内容）'}
           </pre>
-          {currentPageData.markdown_text && currentPageData.markdown_text.includes('|') && (
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginTop: 12 }}
-              message="本页包含表格"
-              description={currentPageData.markdown_text.split('\n').slice(0, 10).join('\n')}
-            />
-          )}
         </div>
       )
     }
@@ -246,10 +237,10 @@ export default function DocumentReader() {
         </Text>
       </div>
 
-      <Card styles={{ body: { padding: 0 } }} style={{ height: 'calc(100vh - 200px)' }}>
-        <div style={{ display: 'flex', height: '100%' }}>
+      <Card className="reader-shell" styles={{ body: { padding: 0 } }}>
+        <div className="reader-layout">
           {/* 左侧：文档列表 + 目录 */}
-          <div style={{ width: 260, borderRight: '1px solid #f0f0f0', padding: 12, overflowY: 'auto' }}>
+          <div className="reader-sidebar">
             <Text strong>文档列表</Text>
             <Select
               style={{ width: '100%', marginTop: 8 }}
@@ -272,19 +263,14 @@ export default function DocumentReader() {
             )}
             <Divider style={{ margin: '12px 0' }} />
             <Text strong>页面导航</Text>
-            <div style={{ marginTop: 8, maxHeight: 400, overflowY: 'auto' }}>
+            <div className="reader-page-list">
               <List
                 size="small"
                 dataSource={pages}
                 renderItem={(p) => (
                   <List.Item
                     onClick={() => setCurrentPage(p.page_number)}
-                    style={{
-                      cursor: 'pointer',
-                      background: currentPage === p.page_number ? '#e6f4ff' : undefined,
-                      padding: '4px 8px',
-                      borderRadius: 4,
-                    }}
+                    className={`reader-page-item ${currentPage === p.page_number ? 'is-selected' : ''}`}
                   >
                     <Space>
                       <Badge
@@ -300,7 +286,7 @@ export default function DocumentReader() {
                       />
                       <Text style={{ fontSize: 12 }}>P{p.page_number}</Text>
                       {p.page_type === 'scan' && <ScanOutlined style={{ fontSize: 12, color: '#fa8c16' }} />}
-                      {p.page_type === 'mixed' && <TableOutlined style={{ fontSize: 12, color: '#1677ff' }} />}
+                      {p.page_type === 'mixed' && <TableOutlined style={{ fontSize: 12, color: '#2457A6' }} />}
                     </Space>
                   </List.Item>
                 )}
@@ -309,7 +295,7 @@ export default function DocumentReader() {
           </div>
 
           {/* 中间：正文 */}
-          <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
+          <div className="reader-main">
             <Segmented
               value={viewMode}
               onChange={(v) => setViewMode(String(v))}
@@ -328,7 +314,7 @@ export default function DocumentReader() {
           </div>
 
           {/* 右侧：当前页参数 + 评分点 + 引用分镜 */}
-          <div style={{ width: 300, borderLeft: '1px solid #f0f0f0', padding: 12, overflowY: 'auto' }}>
+          <div className="reader-inspector">
             <Text strong>本页提取参数</Text>
             {pageFacts.length === 0 && (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本页无参数" />
@@ -337,10 +323,18 @@ export default function DocumentReader() {
               <Card key={f.id} size="small" style={{ marginBottom: 8 }}>
                 <Space direction="vertical" size={0} style={{ width: '100%' }}>
                   <Space>
-                    <Text strong style={{ fontSize: 12 }}>{f.fact_name}</Text>
+                    <Text strong style={{ fontSize: 12 }}>{f.fact_label || f.fact_name || '待识别数字'}</Text>
                     {f.verification_status === 'conflict' && <Tag color="error">冲突</Tag>}
                     {f.verification_status === 'confirmed' && <Tag color="success">已确认</Tag>}
-                    {f.verification_status === 'unverified' && <Tag>待确认</Tag>}
+                    {f.verification_status === 'unverified' && f.usage_status === 'auto_usable' && (
+                      <Tag color="processing">AI可用</Tag>
+                    )}
+                    {f.verification_status === 'unverified' && f.usage_status === 'review' && (
+                      <Tag color="warning">待审核</Tag>
+                    )}
+                    {f.verification_status === 'unverified' && f.usage_status === 'low_confidence' && (
+                      <Tag>自动排除</Tag>
+                    )}
                   </Space>
                   <Text>{f.fact_value}{f.unit}</Text>
                   {f.source_quote && (

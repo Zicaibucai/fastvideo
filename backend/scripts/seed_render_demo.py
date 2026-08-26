@@ -1,6 +1,6 @@
-"""Phase 3 演示数据脚本。
+"""画面渲染演示数据脚本。
 
-为指定项目生成演示模型截图并执行 Mock 渲染绑定。
+为指定项目生成演示模型截图并执行 Mock 渲染，结果保存在素材库。
 用法（在 backend/ 目录下）：
     python -m scripts.seed_render_demo <project_id>
     或
@@ -9,9 +9,7 @@
 
 from __future__ import annotations
 
-import os
 import sys
-import time
 from pathlib import Path
 
 # 确保 backend/ 在 sys.path
@@ -21,8 +19,6 @@ from app.core.database import SessionLocal
 from app.core.storage import storage
 from app.models.asset import Asset
 from app.models.render_job import RenderJob
-from app.models.render_version import RenderVersion
-from app.models.storyboard_shot import StoryboardShot
 from app.services.image_utils import generate_demo_model_shot, make_thumbnail
 from app.services.render_service import run_render_job
 
@@ -36,15 +32,6 @@ DEMO_SHOTS = [
 def seed(project_id: str) -> None:
     db = SessionLocal()
     try:
-        shots = (
-            db.query(StoryboardShot)
-            .filter(StoryboardShot.project_id == project_id)
-            .order_by(StoryboardShot.sequence.asc())
-            .limit(5)
-            .all()
-        )
-        print(f"找到 {len(shots)} 个分镜")
-
         for i, demo in enumerate(DEMO_SHOTS):
             # 生成演示源图
             img_bytes = generate_demo_model_shot(demo["kind"], seed=100 + i)
@@ -82,11 +69,6 @@ def seed(project_id: str) -> None:
             db.add(asset)
             db.flush()
 
-            # 关联到分镜（循环）
-            shot = shots[i % len(shots)] if shots else None
-            if shot:
-                shot.source_model_asset_id = asset.id
-
             # 建立 V0 版本
             from app.services.render_service import ensure_v0_version
 
@@ -99,7 +81,6 @@ def seed(project_id: str) -> None:
                 job = create_render_job(
                     db=db,
                     project_id=project_id,
-                    storyboard_shot_id=shot.id if shot else None,
                     source_asset_id=asset.id,
                     preset_id=None,
                     operation_type="render",
@@ -141,24 +122,6 @@ def seed(project_id: str) -> None:
             run_render_job(job.id)
             print(f"✓ 渲染任务 {job.id} 完成")
 
-        # 绑定第一个演示版本到第一个分镜
-        if shots:
-            first_shot = shots[0]
-            version = (
-                db.query(RenderVersion)
-                .filter(
-                    RenderVersion.render_job_id.in_(
-                        db.query(RenderJob.id).filter(RenderJob.project_id == project_id)
-                    )
-                )
-                .order_by(RenderVersion.created_at.asc())
-                .first()
-            )
-            if version:
-                from app.services.render_service import select_version_for_shot
-
-                select_version_for_shot(db, project_id, first_shot.id, version.id, "demo-seed")
-                print(f"✓ 已绑定版本 {version.version_number} 到分镜 #{first_shot.sequence}")
 
         db.commit()
         print("=== 演示数据完成 ===")

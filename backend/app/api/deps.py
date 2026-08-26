@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -15,12 +15,16 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
+    request: Request,
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> User:
-    if credentials is None:
+    # Browser sessions use an HttpOnly cookie. Bearer auth remains supported
+    # for API clients and existing integrations.
+    token = credentials.credentials if credentials else request.cookies.get("fastvideo_access")
+    if not token:
         raise UnauthorizedError("未提供认证信息")
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     if payload is None:
         raise UnauthorizedError("认证信息无效或已过期")
     user = db.get(User, payload.get("sub"))
@@ -30,12 +34,15 @@ def get_current_user(
 
 
 def get_optional_user(
+    request: Request,
     db: Session = Depends(get_db),
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> User | None:
-    if credentials is None:
+    token = credentials.credentials if credentials else request.cookies.get("fastvideo_access")
+    if not token:
         return None
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     if payload is None:
         return None
-    return db.get(User, payload.get("sub"))
+    user = db.get(User, payload.get("sub"))
+    return user if user and user.is_active else None

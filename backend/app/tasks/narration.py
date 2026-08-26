@@ -12,7 +12,7 @@ from typing import Any
 from app.core.database import SessionLocal
 from app.core.logging import get_logger
 from app.models.render_task import RenderTask
-from app.services.narration_engine import generate_storyboard, regenerate_single_shot
+from app.services.narration_engine import generate_storyboard, regenerate_single_shot, resegment_storyboard
 from app.tasks.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -35,6 +35,8 @@ def gen_narration_task(self, task_id: str) -> dict[str, Any]:
         try:
             if task.params.get("regenerate_shot_id"):
                 result = regenerate_single_shot(task.params)
+            elif task.params.get("resegment_storyboard"):
+                result = resegment_storyboard(task.params)
             else:
                 result = generate_storyboard(task.params)
             db.refresh(task)
@@ -58,4 +60,6 @@ def gen_narration_task(self, task_id: str) -> dict[str, Any]:
 def gen_narration_sync(params: dict[str, Any]) -> dict[str, Any]:
     if params.get("regenerate_shot_id"):
         return regenerate_single_shot(params)
+    if params.get("resegment_storyboard"):
+        return resegment_storyboard(params)
     return generate_storyboard(params)

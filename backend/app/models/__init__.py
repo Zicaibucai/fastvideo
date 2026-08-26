@@ -10,6 +10,8 @@ from app.models.document_chunk import DocumentChunk
 from app.models.extracted_fact import ExtractedFact
 from app.models.scoring_point import ScoringPoint
 from app.models.storyboard_shot import StoryboardShot
+from app.models.narration_run import NarrationRun, NarrationEvidenceBatch, NarrationEvidence
+from app.models.narration_beat import NarrationBeat
 from app.models.asset import Asset
 from app.models.audio_version import AudioVersion
 from app.models.audit_log import AuditLog
@@ -25,8 +27,10 @@ from app.models.video_generation import (
     VideoGenerationJob,
     VideoGenerationTemplate,
     VideoGenerationVersion,
+    VideoTemplateDraft,
 )
 from app.models.export_task import ExportTask
+from app.models.ai_configuration import AIConfiguration
 
 __all__ = [
     "Base",
@@ -43,6 +47,10 @@ __all__ = [
     "ExtractedFact",
     "ScoringPoint",
     "StoryboardShot",
+    "NarrationRun",
+    "NarrationEvidenceBatch",
+    "NarrationEvidence",
+    "NarrationBeat",
     "Asset",
     "AudioVersion",
     "PronunciationProfile",
@@ -58,5 +66,7 @@ __all__ = [
     "VideoGenerationTemplate",
     "VideoGenerationJob",
     "VideoGenerationVersion",
+    "VideoTemplateDraft",
     "ExportTask",
+    "AIConfiguration",
 ]

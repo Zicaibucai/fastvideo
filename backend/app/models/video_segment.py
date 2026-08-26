@@ -23,15 +23,18 @@ class VideoSegment(BaseModel):
     )
     sequence: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
-    # 素材选择（优先级：手动指定 > 绑定视频 > 绑定AI图 > 原始模型截图 > 占位卡）
+    # 素材选择：只保存视频工程中显式选择的图片/视频；不从分镜或 AI 任务自动继承。
     visual_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     audio_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # 时长（秒）
     duration: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
+    # natural 保持原始速度；safe_stretch 仅在安全范围内拉伸；rife 为严格 RIFE 补帧；
+    # interpolate 为用户主动选择的 FFmpeg 补帧；loop/freeze 为短视频兜底。
+    time_adaptation: Mapped[str | None] = mapped_column(String(24), default="natural", nullable=True)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # 画面
+    # 画面（visual_motion 为旧库兼容字段，视频工程不再暴露或使用）
     visual_motion: Mapped[str] = mapped_column(
         String(24), default="zoom_in", nullable=False
     )  # static | zoom_in | zoom_out | pan_left | pan_right | pan_up | pan_down

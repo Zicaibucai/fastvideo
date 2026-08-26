@@ -6,7 +6,7 @@ render/inpaint/outpaint/upscale 四种操作，含成本与进度跟踪。
 
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -14,12 +14,12 @@ from app.models.base import BaseModel
 
 class RenderJob(BaseModel):
     __tablename__ = "render_jobs"
+    __table_args__ = (
+        UniqueConstraint("project_id", "idempotency_key", name="uq_render_jobs_project_idempotency"),
+    )
 
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False
-    )
-    storyboard_shot_id: Mapped[str | None] = mapped_column(
-        ForeignKey("storyboard_shots.id", ondelete="SET NULL"), index=True, nullable=True
     )
     source_asset_id: Mapped[str | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL"), index=True, nullable=True
@@ -63,7 +63,7 @@ class RenderJob(BaseModel):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 幂等键
-    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Provider 任务
     provider_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -82,7 +82,6 @@ class RenderJob(BaseModel):
     concept_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     project = relationship("Project")
-    storyboard_shot = relationship("StoryboardShot", lazy="selectin")
     source_asset = relationship("Asset", foreign_keys=[source_asset_id], lazy="selectin")
     versions = relationship(
         "RenderVersion",

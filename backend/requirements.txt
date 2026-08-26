@@ -33,6 +33,8 @@ pdfplumber==0.11.4
 # HTTP 客户端（调用 AI / 上传）
 httpx==0.28.1
 openai==1.57.0
+# 火山方舟 Responses API（Doubao-Seed-Vision 等多模态模型）
+volcengine-python-sdk[ark]==5.0.46
 
 # 视频 / 音频
 moviepy==2.0.0

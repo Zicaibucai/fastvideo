@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -15,6 +15,9 @@ from app.models.base import BaseModel
 
 class AudioVersion(BaseModel):
     __tablename__ = "audio_versions"
+    __table_args__ = (
+        UniqueConstraint("storyboard_shot_id", "version_number", name="uq_audio_versions_shot_version"),
+    )
 
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False

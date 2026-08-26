@@ -100,7 +100,7 @@ def referencing_shots(
     _get_owned_doc(db, project_id, doc_id, current)
     shots = (
         db.query(StoryboardShot)
-        .filter(StoryboardShot.project_id == project_id)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
         .order_by(StoryboardShot.sequence.asc())
         .all()
     )

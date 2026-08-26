@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,14 +23,45 @@ from app.models import *  # noqa: F401,F403  （注册所有模型）
 logger = get_logger(__name__)
 
 
+def _run_schema_migrations() -> bool:
+    """启动时补齐未执行的 Alembic 迁移，兼容已有开发数据库。"""
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        alembic_ini = Path(__file__).resolve().parent.parent / "alembic.ini"
+        if not alembic_ini.exists():
+            return False
+        config = Config(str(alembic_ini))
+        # Alembic resolves relative paths against the current working
+        # directory, which differs between `uvicorn`, tests, and containers.
+        # Pin both locations to the backend directory next to alembic.ini.
+        config.set_main_option("script_location", str(alembic_ini.parent / "alembic"))
+        config.set_main_option("prepend_sys_path", str(alembic_ini.parent))
+        # ConfigParser treats `%` as interpolation syntax; URL-encoded database
+        # passwords must therefore be escaped before being passed to Alembic.
+        config.set_main_option("sqlalchemy.url", settings.sqlalchemy_url.replace("%", "%%"))
+        command.upgrade(config, "head")
+        logger.info("database_migrations_ready")
+        return True
+    except Exception as exc:
+        logger.exception("database_migration_failed", error=str(exc))
+        return False
+
+
 def _init_db() -> None:
     """首次启动：建表 + 管理员 + 系统配音模板种子。"""
     try:
-        Base.metadata.create_all(bind=engine)
+        if not _run_schema_migrations():
+            raise RuntimeError("数据库迁移未完成，拒绝启动以避免使用不一致的 schema")
+        # Alembic is authoritative in production.  Keep create_all only as a
+        # convenience for local demo databases after migrations succeed.
+        if settings.app_env.lower() not in {"prod", "production"}:
+            Base.metadata.create_all(bind=engine)
         logger.info("database_tables_ready")
     except Exception as exc:
         logger.exception("database_init_failed", error=str(exc))
-        return
+        raise
 
     db = SessionLocal()
     try:
@@ -74,14 +106,37 @@ def _init_db() -> None:
 
         seed_system_presets(db)
 
-        # 系统 AI 视频生成模板（10 个建筑视频模板）
+        # 系统 AI 视频生成模板（42 个建筑视频模板）
         from app.services.video_gen_service import seed_video_generation_templates
 
         seed_video_generation_templates(db)
+
+        from app.services.ai_configuration import load_runtime_config
+
+        load_runtime_config(db)
     except Exception as exc:
         logger.exception("seed_failed", error=str(exc))
     finally:
         db.close()
+
+
+def _cleanup_stale_uploads() -> None:
+    """启动时清理废弃的分片上传暂存目录，避免大文件残片写满磁盘。"""
+    try:
+        from app.services.upload_cleanup import cleanup_resumable_uploads
+
+        cleanup_resumable_uploads()
+    except Exception as exc:  # pragma: no cover
+        logger.exception("upload_cleanup_failed", error=str(exc))
+
+
+def _recover_local_tasks() -> None:
+    try:
+        from app.services.task_runner import recover_local_narration_tasks
+
+        recover_local_narration_tasks()
+    except Exception as exc:  # pragma: no cover
+        logger.exception("local_task_recovery_failed", error=str(exc))
 
 
 @asynccontextmanager
@@ -89,6 +144,8 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("fastvideo_start", env=settings.app_env, db=settings.database_url)
     _init_db()
+    _cleanup_stale_uploads()
+    _recover_local_tasks()
     yield
     logger.info("fastvideo_stop")
 
@@ -112,6 +169,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def same_origin_guard(request, call_next):
+    """Reject cross-origin state-changing cookie requests.
+
+    Browser sessions authenticate via an HttpOnly cookie.  SameSite=Lax is a
+    useful baseline, while this explicit Origin check also protects requests
+    initiated by same-site subdomains or permissive browser integrations.
+    Bearer-token API clients without a cookie are unaffected.
+    """
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and request.cookies.get("fastvideo_access"):
+        origin = request.headers.get("origin")
+        if origin and origin not in settings.backend_cors_origins:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=403, content={"message": "请求来源不受信任"})
+    return await call_next(request)
+
 # 统一异常处理
 register_exception_handlers(app)
 
@@ -127,6 +202,7 @@ except Exception:
 
 # 路由
 from app.api.v1 import (  # noqa: E402
+    admin,
     assets,
     auth,
     documents,
@@ -139,6 +215,7 @@ from app.api.v1 import (  # noqa: E402
     render_presets,
     scoring,
     storyboard,
+    settings as settings_api,
     tasks,
     video,
     video_gen,
@@ -149,6 +226,7 @@ from app.api.v1 import (  # noqa: E402
 api_prefix = settings.api_v1_prefix
 app.include_router(health.router, prefix=api_prefix)
 app.include_router(auth.router, prefix=api_prefix)
+app.include_router(admin.router, prefix=api_prefix)
 app.include_router(projects.router, prefix=api_prefix)
 app.include_router(documents.router, prefix=api_prefix)
 app.include_router(reader.router, prefix=api_prefix)
@@ -164,6 +242,7 @@ app.include_router(voice.voice_router, prefix=api_prefix)
 app.include_router(voice.shot_voice_router, prefix=api_prefix)
 app.include_router(video.router, prefix=api_prefix)
 app.include_router(video_gen.router, prefix=api_prefix)
+app.include_router(settings_api.router, prefix=api_prefix)
 app.include_router(render_presets.router, prefix=api_prefix)
 app.include_router(render.router, prefix=api_prefix)
 app.include_router(files.router)

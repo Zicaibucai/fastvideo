@@ -183,8 +183,7 @@ def test_ass_chinese_font():
     ass = build_ass(subs, style={"font_size": 46})
     assert "Noto Serif CJK SC" in ass
     assert "中文字幕测试" in ass
-    # 字体文件存在（libass 可用）
-    assert Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc").exists()
+    # 只验证 ASS 声明了目标字体；字体文件路径随 Linux/macOS/容器镜像不同。
 
 
 def test_srt_utf8():

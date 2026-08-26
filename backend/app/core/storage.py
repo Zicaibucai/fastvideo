@@ -71,6 +71,22 @@ class LocalStorage:
     def exists(self, key: str) -> bool:
         return self._full_path(key).exists()
 
+    def local_path(self, key: str) -> str:
+        """返回文件在本地磁盘上的绝对路径，供大文件流式解析使用。
+
+        注意：调用方使用完毕后必须调用 ``release_local_path(path)`` 释放资源。
+        对于 LocalStorage 这是个空操作；对于 MinioStorage 会删除临时下载文件。
+        """
+        full = self._full_path(key)
+        self._ensure_within_root(full)
+        if not full.exists():
+            raise StorageError(f"文件不存在: {key}")
+        return str(full)
+
+    def release_local_path(self, path: str) -> None:
+        """释放 local_path 返回的资源。LocalStorage 无需清理。"""
+        return None
+
     def url(self, key: str) -> str:
         quoted = quote(key)
         return f"/files/{quoted}"
@@ -129,6 +145,29 @@ class MinioStorage:
             return True
         except Exception:
             return False
+
+    def local_path(self, key: str) -> str:
+        """MinIO 非本地存储，下载到临时文件后返回路径，供大文件流式解析使用。
+
+        调用方使用完毕后**必须**调用 ``release_local_path(path)`` 删除临时文件。
+        """
+        import tempfile
+
+        suffix = Path(key).suffix
+        fd, tmp_path = tempfile.mkstemp(prefix="fastvideo_parse_", suffix=suffix)
+        import os
+
+        os.close(fd)
+        try:
+            self.client.fget_object(self.bucket, key, tmp_path)
+        except Exception:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
+        return tmp_path
+
+    def release_local_path(self, path: str) -> None:
+        """删除 MinioStorage.local_path 下载到本地的临时文件。"""
+        Path(path).unlink(missing_ok=True)
 
     def url(self, key: str) -> str:
         return self.client.presigned_get_object(self.bucket, key)

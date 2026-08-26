@@ -1,4 +1,4 @@
-"""渲染 API 路由：源图上传、任务创建/查询、版本管理、分镜绑定、遮罩、对比。"""
+"""渲染 API 路由：源图上传、任务创建/查询、版本管理、遮罩、对比。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, File, Form, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adapters.factory import get_image_adapter, image_provider_info
@@ -19,8 +20,8 @@ from app.core.storage import storage
 from app.models.asset import Asset
 from app.models.project import Project
 from app.models.render_job import RenderJob
+from app.models.render_preset import RenderPreset
 from app.models.render_version import RenderVersion
-from app.models.storyboard_shot import StoryboardShot
 from app.models.user import User
 from app.schemas.render import (
     CompareRequest,
@@ -30,7 +31,6 @@ from app.schemas.render import (
     RenderTaskCreate,
     RenderTaskOut,
     RenderVersionOut,
-    SelectVersionRequest,
     SourceImageMeta,
     SourceImageOut,
     UpscaleRequest,
@@ -46,9 +46,7 @@ from app.services.render_service import (
     create_render_job,
     ensure_v0_version,
     estimate_cost,
-    restore_shot_visual,
     run_render_job,
-    select_version_for_shot,
     soft_delete_version,
 )
 from app.tasks.render import render_job_task
@@ -86,7 +84,6 @@ def _to_task_out(job: RenderJob) -> RenderTaskOut:
     return RenderTaskOut(
         id=job.id,
         project_id=job.project_id,
-        storyboard_shot_id=job.storyboard_shot_id,
         source_asset_id=job.source_asset_id,
         preset_id=job.preset_id,
         operation_type=job.operation_type,
@@ -128,7 +125,6 @@ async def upload_source_image(
     project_stage: str | None = Form(None),
     camera_angle: str = Form("建筑人视"),
     is_original_model_shot: bool = Form(True),
-    storyboard_shot_id: str | None = Form(None),
     license_note: str | None = Form(None),
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
@@ -190,13 +186,6 @@ async def upload_source_image(
     db.add(asset)
     db.commit()
     db.refresh(asset)
-
-    # 关联分镜（若指定）
-    if storyboard_shot_id:
-        shot = db.get(StoryboardShot, storyboard_shot_id)
-        if shot and shot.project_id == project_id:
-            shot.source_model_asset_id = asset.id
-            db.commit()
 
     # 建立 V0 版本
     ensure_v0_version(db, asset.id)
@@ -328,12 +317,6 @@ def create_render_task(
             "不得递归作为工程 BIM 渲染源图。"
         )
 
-    # 校验分镜归属
-    if payload.storyboard_shot_id:
-        shot = db.get(StoryboardShot, payload.storyboard_shot_id)
-        if not shot or shot.project_id != project_id:
-            raise NotFoundError("分镜不存在或不属于当前项目")
-
     # 遮罩归属
     if payload.mask_asset_id:
         _get_owned_asset(db, project_id, payload.mask_asset_id, current)
@@ -381,45 +364,53 @@ def create_render_task(
     effective_provider = active_adapter.provider
 
     # 预估成本
-    job = create_render_job(
-        db=db,
-        project_id=project_id,
-        storyboard_shot_id=payload.storyboard_shot_id,
-        source_asset_id=payload.source_asset_id,
-        preset_id=payload.preset_id,
-        operation_type=payload.operation_type,
-        positive_prompt=positive,
-        negative_prompt=negative,
-        aspect_ratio=payload.aspect_ratio,
-        output_width=payload.output_width,
-        output_height=payload.output_height,
-        variant_count=payload.variant_count,
-        structure_strength=payload.structure_strength,
-        creativity=payload.creativity,
-        seed=payload.seed,
-        provider=effective_provider,
-        model_name=payload.model_name or settings.ai_image_model,
-        preserve_logo=payload.preserve_logo,
-        preserve_text=payload.preserve_text,
-        preserve_roads=payload.preserve_roads,
-        preserve_building_shape=payload.preserve_building_shape,
-        preserve_equipment=payload.preserve_equipment,
-        custom_constraints=payload.custom_constraints,
-        mask_asset_id=payload.mask_asset_id,
-        idempotency_key=payload.idempotency_key,
-        is_conceptual=payload.is_conceptual,
-        concept_note=payload.concept_note,
-        estimated_cost=0.0,
-    )
+    try:
+        job = create_render_job(
+            db=db,
+            project_id=project_id,
+            source_asset_id=payload.source_asset_id,
+            preset_id=payload.preset_id,
+            operation_type=payload.operation_type,
+            positive_prompt=positive,
+            negative_prompt=negative,
+            aspect_ratio=payload.aspect_ratio,
+            output_width=payload.output_width,
+            output_height=payload.output_height,
+            variant_count=payload.variant_count,
+            structure_strength=payload.structure_strength,
+            creativity=payload.creativity,
+            seed=payload.seed,
+            provider=effective_provider,
+            model_name=payload.model_name or settings.ai_image_model,
+            preserve_logo=payload.preserve_logo,
+            preserve_text=payload.preserve_text,
+            preserve_roads=payload.preserve_roads,
+            preserve_building_shape=payload.preserve_building_shape,
+            preserve_equipment=payload.preserve_equipment,
+            custom_constraints=payload.custom_constraints,
+            mask_asset_id=payload.mask_asset_id,
+            idempotency_key=payload.idempotency_key,
+            is_conceptual=payload.is_conceptual,
+            concept_note=payload.concept_note,
+            estimated_cost=0.0,
+        )
+    except IntegrityError:
+        db.rollback()
+        if not payload.idempotency_key:
+            raise
+        existing = (
+            db.query(RenderJob)
+            .filter(
+                RenderJob.project_id == project_id,
+                RenderJob.idempotency_key == payload.idempotency_key,
+            )
+            .first()
+        )
+        if not existing:
+            raise
+        return _to_task_out(existing)
     job.estimated_cost = estimate_cost(job)
     db.commit()
-
-    # 更新分镜审核状态
-    if payload.storyboard_shot_id:
-        shot = db.get(StoryboardShot, payload.storyboard_shot_id)
-        if shot:
-            shot.visual_review_status = "generating"
-            db.commit()
 
     _dispatch_render(db, job)
     db.refresh(job)
@@ -458,7 +449,6 @@ def _fake_render_task(db: Session, job: RenderJob):
 def list_render_tasks(
     project_id: str,
     status: str | None = None,
-    shot_id: str | None = None,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[RenderTaskOut]:
@@ -466,8 +456,6 @@ def list_render_tasks(
     query = db.query(RenderJob).filter(RenderJob.project_id == project_id)
     if status:
         query = query.filter(RenderJob.status == status)
-    if shot_id:
-        query = query.filter(RenderJob.storyboard_shot_id == shot_id)
     jobs = query.order_by(RenderJob.created_at.desc()).limit(100).all()
     return [_to_task_out(j) for j in jobs]
 
@@ -557,7 +545,6 @@ def render_task_results(
 def list_versions(
     project_id: str,
     source_asset_id: str | None = None,
-    shot_id: str | None = None,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[RenderVersion]:
@@ -565,17 +552,6 @@ def list_versions(
     query = db.query(RenderVersion).filter(RenderVersion.is_deleted.is_(False))
     if source_asset_id:
         query = query.filter(RenderVersion.source_asset_id == source_asset_id)
-    if shot_id:
-        jobs = (
-            db.query(RenderJob.id)
-            .filter(RenderJob.project_id == project_id, RenderJob.storyboard_shot_id == shot_id)
-            .all()
-        )
-        job_ids = [j[0] for j in jobs]
-        if job_ids:
-            query = query.filter(RenderVersion.render_job_id.in_(job_ids))
-        else:
-            return []
     return query.order_by(RenderVersion.created_at.desc()).limit(200).all()
 
 
@@ -592,24 +568,6 @@ def get_version(
         raise NotFoundError("版本不存在")
     return v
 
-
-@router.post("/versions/{version_id}/select", response_model=dict, summary="选择版本作为分镜画面")
-def select_version(
-    project_id: str,
-    version_id: str,
-    payload: SelectVersionRequest,
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user),
-) -> dict:
-    _get_owned_project(db, project_id, current)
-    v = db.get(RenderVersion, version_id)
-    if not v or v.is_deleted:
-        raise NotFoundError("版本不存在")
-    result_asset = db.get(Asset, v.result_asset_id) if v.result_asset_id else None
-    shot_id = payload.version_id  # 兼容：前端传 version_id
-    # 需要 shot_id，从请求中获取；这里用 body 里的 version_id 做 shot 关联不合适，
-    # 实际 shot_id 通过 query 或扩展 payload 传入。使用 query 参数 shot_id。
-    return {"detail": "请使用 /storyboard/{shot_id}/visual/select 接口绑定分镜画面"}
 
 
 @router.delete("/versions/{version_id}", status_code=204, summary="删除版本（软删除）")
@@ -736,7 +694,6 @@ def inpaint(
     return create_render_task(
         project_id, RenderTaskCreate(
             source_asset_id=payload.source_asset_id,
-            storyboard_shot_id=payload.storyboard_shot_id,
             operation_type="inpaint",
             positive_prompt=payload.positive_prompt,
             mask_asset_id=payload.mask_asset_id,
@@ -784,7 +741,6 @@ def outpaint(
     return create_render_task(
         project_id, RenderTaskCreate(
             source_asset_id=payload.source_asset_id,
-            storyboard_shot_id=payload.storyboard_shot_id,
             operation_type="outpaint",
             positive_prompt=payload.positive_prompt,
             aspect_ratio=ratio,
@@ -821,7 +777,6 @@ def upscale(
     return create_render_task(
         project_id, RenderTaskCreate(
             source_asset_id=payload.source_asset_id,
-            storyboard_shot_id=payload.storyboard_shot_id,
             operation_type="upscale",
             positive_prompt="清晰度增强，保持原图内容",
             variant_count=1,

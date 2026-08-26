@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from app.adapters.factory import get_ocr_adapter
@@ -56,6 +58,7 @@ class ParsedChunk:
     content: str
     chunk_type: str = "paragraph"  # heading | paragraph | table
     metadata: dict = field(default_factory=dict)
+    sequence: int = 0
 
 
 @dataclass
@@ -109,8 +112,11 @@ def _suggest_doc_type_by_name(file_name: str) -> str:
 # ============================================================
 
 def _parse_pdf(data: bytes) -> ParsedDocument:
-    import io
+    return _parse_pdf_from_source(io.BytesIO(data))
 
+
+def _parse_pdf_from_source(source) -> ParsedDocument:
+    """从文件路径或二进制流解析 PDF，避免把整个文件读进内存。"""
     import pdfplumber
 
     pages: list[ParsedPage] = []
@@ -119,8 +125,9 @@ def _parse_pdf(data: bytes) -> ParsedDocument:
     ocr_pages = 0
     failed_pages = 0
     table_count = 0
+    source_bytes: bytes | None = None
 
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
+    with pdfplumber.open(source) as pdf:
         total = len(pdf.pages)
         heading_stack: list[str] = []
 
@@ -151,7 +158,18 @@ def _parse_pdf(data: bytes) -> ParsedDocument:
                 ocr_adapter = get_ocr_adapter()
                 try:
                     if ocr_adapter.is_available():
-                        ocr_result = ocr_adapter.ocr_pdf_page(data, idx - 1)
+                        # OCR 适配器需要完整 PDF 字节；仅在首次遇到扫描页时
+                        # 惰性读取，保持普通文本 PDF 的流式解析特性。
+                        if source_bytes is None:
+                            current_pos = source.tell() if hasattr(source, "tell") else None
+                            try:
+                                if hasattr(source, "seek"):
+                                    source.seek(0)
+                                source_bytes = source.read()
+                            finally:
+                                if current_pos is not None and hasattr(source, "seek"):
+                                    source.seek(current_pos)
+                        ocr_result = ocr_adapter.ocr_pdf_page(source_bytes, idx - 1)
                         ocr_text = ocr_result.get("text", "")
                         confidence = ocr_result.get("confidence")
                         if ocr_text.strip():
@@ -237,6 +255,7 @@ def _parse_pdf(data: bytes) -> ParsedDocument:
     chunk_blocks = _split_paragraph_chunks(pages)
     chunks.extend(chunk_blocks)
 
+    _assign_chunk_sequences(chunks)
     return ParsedDocument(
         pages=pages,
         chunks=chunks,
@@ -284,6 +303,12 @@ def _split_paragraph_chunks(pages: list[ParsedPage]) -> list[ParsedChunk]:
     return chunks
 
 
+def _assign_chunk_sequences(chunks: list[ParsedChunk]) -> None:
+    """为解析结果补齐稳定的文档顺序。"""
+    for index, chunk in enumerate(chunks, start=1):
+        chunk.sequence = index
+
+
 def _table_to_json(table: list[list]) -> dict:
     """PDF 表格 → {headers: [], rows: []}。"""
     rows = []
@@ -312,63 +337,93 @@ def _table_to_markdown(table: dict | list) -> str:
 def _parse_docx(data: bytes) -> ParsedDocument:
     import io
 
-    from docx import Document
+    return _parse_docx_from_source(io.BytesIO(data))
 
-    doc = Document(io.BytesIO(data))
+
+def _parse_docx_from_source(source) -> ParsedDocument:
+    """从文件路径或二进制流解析 DOCX。"""
+    from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+
+    doc = Document(source)
 
     pages: list[ParsedPage] = []
     chunks: list[ParsedChunk] = []
     toc: list[dict] = []
     table_count = 0
 
-    # DOCX 无真实分页，使用"段落位置"（虚拟分页：每 40 段为一页）
+    # DOCX 通常没有稳定的分页信息。优先使用 Word 写入的分页标记，
+    # 没有标记时继续使用段落位置，避免伪装成真实页码。
     PAGE_SIZE = 40
-    para_blocks: list[tuple[str, int, int | None]] = []  # (text, level, page_no)
+    para_blocks: list[tuple[str, int | None, int, bool, dict[str, Any]]] = []
+    page_no = 1
+    sequence = 0
+    has_explicit_page_break = False
 
-    # 收集段落
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if not text:
-            continue
-        level = _detect_docx_heading_level(para)
-        para_blocks.append((text, level, None))
+    # 必须遍历 document.body 的子节点；分别读取 doc.paragraphs 和
+    # doc.tables 会把表格全部移动到文档末尾，破坏施工方案原始顺序。
+    for child in doc.element.body.iterchildren():
+        if isinstance(child, CT_P):
+            para = Paragraph(child, doc)
+            text = para.text.strip()
+            if not text:
+                if _docx_block_has_page_break(child):
+                    has_explicit_page_break = True
+                    page_no += 1
+                continue
+            level = _detect_docx_heading_level(para)
+            sequence += 1
+            para_blocks.append((text, level, page_no, False, {"sequence": sequence}))
+            if _docx_block_has_page_break(child):
+                has_explicit_page_break = True
+                page_no += 1
+        elif isinstance(child, CT_Tbl):
+            try:
+                table = Table(child, doc)
+                table_json = _table_to_json([[cell.text for cell in row.cells] for row in table.rows])
+                table_md = _table_to_markdown(table_json)
+                if table_md.strip():
+                    table_count += 1
+                    sequence += 1
+                    para_blocks.append(
+                        (table_md, -1, page_no, True, {"sequence": sequence, "tables": table_json})
+                    )
+                if _docx_block_has_page_break(child):
+                    has_explicit_page_break = True
+                    page_no += 1
+            except Exception as exc:
+                logger.warning("docx_table_parse_failed", error=str(exc))
 
-    # 收集表格（作为段落块插入，级别标记为 -1 表示表格）
-    for tbl in doc.tables:
-        try:
-            table_json = _table_to_json([[cell.text for cell in row.cells] for row in tbl.rows])
-            table_md = _table_to_markdown(table_json)
-            table_count += 1
-            para_blocks.append((f"__TABLE__{table_md}", -1, None))
-        except Exception:
-            pass
-
-    # 虚拟分页
-    virtual_pages = max(1, (len(para_blocks) + PAGE_SIZE - 1) // PAGE_SIZE)
-    for i, (text, level, _) in enumerate(para_blocks):
-        page_no = i // PAGE_SIZE + 1
-        para_blocks[i] = (text, level, page_no)
+    # 没有显式分页的DOCX仍使用稳定的虚拟页标签，仅用于定位，不称为真实PDF页。
+    if page_no == 1 and para_blocks:
+        para_blocks = [
+            (text, level, (index - 1) // PAGE_SIZE + 1, is_table, metadata)
+            for index, (text, level, _page, is_table, metadata) in enumerate(para_blocks, start=1)
+        ]
 
     # 当前页文本
     page_texts: dict[int, list[str]] = {}
-    for text, _level, page_no in para_blocks:
-        page_texts.setdefault(page_no, []).append(text.replace("__TABLE__", ""))
+    for text, _level, page_no, _is_table, _metadata in para_blocks:
+        page_texts.setdefault(page_no, []).append(text)
 
     # 构建页面
     heading_stack: list[str] = []
-    for i, (text, level, page_no) in enumerate(para_blocks):
-        is_table = text.startswith("__TABLE__")
-        content = text[9:] if is_table else text
+    for text, level, page_no, is_table, metadata in para_blocks:
+        content = text
 
         if is_table:
             chunks.append(
                 ParsedChunk(
-                    page_start=page_no,
-                    page_end=page_no,
-                    heading_path=" > ".join(heading_stack) if heading_stack else None,
-                    content=content,
-                    chunk_type="table",
-                )
+                        page_start=page_no,
+                        page_end=page_no,
+                        heading_path=" > ".join(heading_stack) if heading_stack else None,
+                        content=content,
+                        chunk_type="table",
+                        metadata=metadata,
+                    )
             )
             continue
 
@@ -394,6 +449,7 @@ def _parse_docx(data: bytes) -> ParsedDocument:
                     heading_path=" > ".join(heading_stack),
                     content=text,
                     chunk_type="heading",
+                    metadata=metadata,
                 )
             )
         else:
@@ -404,6 +460,7 @@ def _parse_docx(data: bytes) -> ParsedDocument:
                     heading_path=" > ".join(heading_stack) if heading_stack else None,
                     content=text,
                     chunk_type="paragraph",
+                    metadata=metadata,
                 )
             )
 
@@ -420,10 +477,16 @@ def _parse_docx(data: bytes) -> ParsedDocument:
                 page_type="text",
                 extraction_method="native",
                 ocr_status="none",
-                metadata={"is_virtual_page": True},
+                metadata={"is_virtual_page": not has_explicit_page_break},
             )
         )
 
+    _assign_chunk_sequences(chunks)
+    for chunk in chunks:
+        chunk.metadata["is_virtual_page"] = not has_explicit_page_break
+        chunk.metadata["location_label"] = (
+            f"段落{chunk.page_start}" if not has_explicit_page_break else f"P{chunk.page_start}"
+        )
     return ParsedDocument(
         pages=pages,
         chunks=chunks,
@@ -432,6 +495,15 @@ def _parse_docx(data: bytes) -> ParsedDocument:
         ocr_pages=0,
         failed_pages=0,
         table_count=table_count,
+    )
+
+
+def _docx_block_has_page_break(block) -> bool:
+    """检查Word正文块中的显式分页标记。"""
+    xml = block.xml if hasattr(block, "xml") else str(block)
+    return bool(
+        re.search(r"lastRenderedPageBreak", xml)
+        or re.search(r"w:br[^>]+w:type=[\"']page[\"']", xml)
     )
 
 
@@ -554,6 +626,7 @@ def _parse_txt(data: bytes) -> ParsedDocument:
             )
         )
 
+    _assign_chunk_sequences(chunks)
     return ParsedDocument(
         pages=pages,
         chunks=chunks,
@@ -569,14 +642,7 @@ def _parse_txt(data: bytes) -> ParsedDocument:
 # 统一入口
 # ============================================================
 
-def parse_document_bytes(data: bytes, file_type: str) -> ParsedDocument:
-    """按文件类型解析。"""
-    if file_type == "pdf":
-        return _parse_pdf(data)
-    if file_type == "docx":
-        return _parse_docx(data)
-    if file_type == "txt":
-        return _parse_txt(data)
+def _parse_unknown_bytes(data: bytes) -> ParsedDocument:
     # 其他类型：仅存文本
     try:
         text = data.decode("utf-8", errors="replace")
@@ -602,6 +668,41 @@ def parse_document_bytes(data: bytes, file_type: str) -> ParsedDocument:
         failed_pages=0,
         table_count=0,
     )
+
+
+def parse_document_bytes(data: bytes, file_type: str) -> ParsedDocument:
+    """按文件类型解析（小文件/测试使用，整文件载入内存）。"""
+    if file_type == "pdf":
+        return _parse_pdf(data)
+    if file_type == "docx":
+        return _parse_docx(data)
+    if file_type == "txt":
+        return _parse_txt(data)
+    return _parse_unknown_bytes(data)
+
+
+def parse_document_path(path: str | Path, file_type: str) -> ParsedDocument:
+    """从磁盘文件路径解析，供大文件使用：PDF/DOCX 以文件流方式打开，避免整文件读入内存。"""
+    path = str(path)
+    if file_type == "pdf":
+        with open(path, "rb") as fh:
+            return _parse_pdf_from_source(fh)
+    if file_type == "docx":
+        with open(path, "rb") as fh:
+            return _parse_docx_from_source(fh)
+    if file_type == "txt":
+        # 文本文件通常较小；逐块尝试解码
+        with open(path, "rb") as fh:
+            head = fh.read(4096)
+        try:
+            head.decode("utf-8")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            encoding = "gbk"
+        with open(path, encoding=encoding, errors="replace") as fh:
+            return _parse_txt(fh.read().encode("utf-8"))
+    with open(path, "rb") as fh:
+        return _parse_unknown_bytes(fh.read())
 
 
 def compute_sha256(data: bytes) -> str:

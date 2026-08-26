@@ -15,7 +15,13 @@ from app.adapters.image import (
     MockImageAdapter,
     SeedreamImageAdapter,
 )
-from app.adapters.llm import DeepSeekLLMAdapter, LLMAdapter, MockLLMAdapter
+from app.adapters.llm import (
+    DeepSeekLLMAdapter,
+    KimiLLMAdapter,
+    LLMAdapter,
+    MockLLMAdapter,
+    VolcengineVisionLLMAdapter,
+)
 from app.adapters.ocr import BaseOCRAdapter, MockOCRAdapter, TesseractOCRAdapter
 from app.adapters.tts import MockTTSAdapter, TTSAdapter, VolcengineTTSAdapter
 from app.adapters.video import (
@@ -27,13 +33,14 @@ from app.adapters.video import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services.ai_configuration import provider_config, stage_config
 
 logger = get_logger(__name__)
 
 
-def _openai_kwargs(*, model: str, base_url: str = "") -> dict:
+def _openai_kwargs(*, api_key: str, model: str, base_url: str = "") -> dict:
     return {
-        "api_key": settings.openai_api_key,
+        "api_key": api_key,
         "base_url": base_url or settings.openai_base_url,
         "timeout": settings.openai_timeout,
         "model": model,
@@ -56,98 +63,120 @@ def _unknown(mock_cls, provider: str) -> BaseAIAdapter:
 
 
 @lru_cache
-def get_llm_adapter() -> BaseAIAdapter:
-    provider = settings.ai_llm_provider.strip().lower()
+def get_llm_adapter(stage: str = "narration") -> BaseAIAdapter:
+    stage_value = stage_config(stage)
+    provider = str(stage_value.get("provider") or settings.ai_llm_provider).strip().lower()
+    provider_value = provider_config(provider)
+    model = str(stage_value.get("model") or provider_value.get("model") or settings.ai_llm_model)
     if provider == "deepseek":
-        if not settings.deepseek_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockLLMAdapter, requested_provider=provider)
         return DeepSeekLLMAdapter(
-            api_key=settings.deepseek_api_key,
-            base_url=settings.ai_llm_base_url or settings.deepseek_base_url,
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.deepseek_base_url,
             timeout=settings.deepseek_timeout,
-            model=settings.ai_llm_model or "deepseek-v4-flash",
+            model=model or "deepseek-v4-flash",
+        )
+    if provider == "kimi":
+        if not provider_value.get("api_key"):
+            return _mock(MockLLMAdapter, requested_provider=provider)
+        return KimiLLMAdapter(
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.kimi_base_url,
+            timeout=settings.kimi_timeout,
+            model=model or settings.kimi_model,
+        )
+    if provider == "volcengine_vision":
+        if not provider_value.get("api_key"):
+            return _mock(MockLLMAdapter, requested_provider=provider)
+        return VolcengineVisionLLMAdapter(
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.volcengine_vision_base_url,
+            timeout=settings.volcengine_vision_timeout,
+            model=model or settings.volcengine_vision_model,
         )
     if provider in ("openai", "azure"):
-        if not settings.openai_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockLLMAdapter, requested_provider=provider)
-        return LLMAdapter(**_openai_kwargs(
-            model=settings.ai_llm_model,
-            base_url=settings.ai_llm_base_url,
-        ))
+        return LLMAdapter(api_key=provider_value.get("api_key"), base_url=provider_value.get("base_url"), timeout=settings.openai_timeout, model=model)
     if provider in ("disabled", "mock", ""):
         return _mock(MockLLMAdapter, requested_provider=provider)
     return _unknown(MockLLMAdapter, provider)
 
 
 @lru_cache
-def get_image_adapter() -> BaseAIAdapter:
-    provider = settings.ai_image_provider.strip().lower()
+def get_image_adapter(stage: str = "image") -> BaseAIAdapter:
+    stage_value = stage_config(stage)
+    provider = str(stage_value.get("provider") or settings.ai_image_provider).strip().lower()
+    provider_value = provider_config(provider)
+    model = str(stage_value.get("model") or provider_value.get("model") or settings.ai_image_model)
     if provider == "seedream":
-        api_key = settings.seedream_api_key or settings.seedance_api_key
+        api_key = provider_value.get("api_key") or settings.seedream_api_key or settings.seedance_api_key
         if not api_key:
             return _mock(MockImageAdapter, requested_provider=provider)
         return SeedreamImageAdapter(
             api_key=api_key,
-            base_url=settings.ai_image_base_url or settings.seedream_base_url,
+            base_url=provider_value.get("base_url") or settings.seedream_base_url,
             timeout=settings.seedream_timeout,
-            model=settings.ai_image_model or settings.seedream_image_model,
+            model=model or settings.seedream_image_model,
             size=settings.seedream_image_size,
         )
     if provider == "minimax":
-        if not settings.minimax_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockImageAdapter, requested_provider=provider)
         return MiniMaxImageAdapter(
-            api_key=settings.minimax_api_key,
-            base_url=settings.ai_image_base_url or settings.minimax_base_url,
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.minimax_base_url,
             timeout=settings.minimax_timeout,
-            model=settings.ai_image_model or "image-01",
+            model=model or "image-01",
             size=settings.ai_image_size,
         )
     if provider == "openai":
-        if not settings.openai_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockImageAdapter, requested_provider=provider)
-        return ImageAdapter(**_openai_kwargs(
-            model=settings.ai_image_model,
-            base_url=settings.ai_image_base_url,
-        ), size=settings.ai_image_size)
+        return ImageAdapter(api_key=provider_value.get("api_key"), base_url=provider_value.get("base_url"), timeout=settings.openai_timeout, model=model, size=settings.ai_image_size)
     if provider in ("disabled", "mock", ""):
         return _mock(MockImageAdapter, requested_provider=provider)
     return _unknown(MockImageAdapter, provider)
 
 
 @lru_cache
-def get_video_adapter() -> BaseAIAdapter:
-    provider = settings.ai_video_provider.strip().lower()
+def get_video_adapter(stage: str = "video") -> BaseAIAdapter:
+    stage_value = stage_config(stage)
+    provider = str(stage_value.get("provider") or settings.ai_video_provider).strip().lower()
+    provider_value = provider_config(provider)
+    model = str(stage_value.get("model") or provider_value.get("model") or settings.ai_video_model)
     if provider == "seedance":
-        if not settings.seedance_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockVideoAdapter, requested_provider=provider)
         return SeedanceVideoAdapter(
-            api_key=settings.seedance_api_key,
-            base_url=settings.ai_video_base_url or settings.seedance_base_url,
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.seedance_base_url,
             timeout=settings.seedance_timeout,
-            model=settings.ai_video_model or settings.seedance_video_model,
+            model=model or settings.seedance_video_model,
             resolution=settings.seedance_video_resolution,
             poll_interval=settings.seedance_poll_interval,
             video_timeout=settings.seedance_video_timeout,
         )
     if provider == "minimax":
-        if not settings.minimax_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockVideoAdapter, requested_provider=provider)
         return MiniMaxH3VideoAdapter(
-            api_key=settings.minimax_api_key,
-            base_url=settings.ai_video_base_url or settings.minimax_base_url,
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.minimax_base_url,
             timeout=settings.minimax_timeout,
-            model=settings.minimax_video_model,
+            model=model or settings.minimax_video_model,
             resolution=settings.minimax_video_resolution,
             poll_interval=settings.minimax_video_poll_interval,
             video_timeout=settings.minimax_video_timeout,
         )
     if provider == "openai":
-        if not settings.openai_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockVideoAdapter, requested_provider=provider)
         return VideoAdapter(**_openai_kwargs(
-            model=settings.ai_video_model,
-            base_url=settings.ai_video_base_url,
+            api_key=provider_value.get("api_key"),
+            model=model,
+            base_url=provider_value.get("base_url") or settings.ai_video_base_url,
         ))
     if provider in ("disabled", "mock", ""):
         return _mock(MockVideoAdapter, requested_provider=provider)
@@ -155,25 +184,25 @@ def get_video_adapter() -> BaseAIAdapter:
 
 
 @lru_cache
-def get_tts_adapter() -> BaseAIAdapter:
-    provider = settings.ai_tts_provider.strip().lower()
+def get_tts_adapter(stage: str = "voice") -> BaseAIAdapter:
+    stage_value = stage_config(stage)
+    provider = str(stage_value.get("provider") or settings.ai_tts_provider).strip().lower()
+    provider_value = provider_config(provider)
+    model = str(stage_value.get("model") or provider_value.get("model") or settings.ai_tts_model)
     if provider == "volcengine":
-        if not settings.volcengine_tts_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockTTSAdapter, requested_provider=provider)
         return VolcengineTTSAdapter(
-            api_key=settings.volcengine_tts_api_key,
-            base_url=settings.volcengine_tts_base_url,
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.volcengine_tts_base_url,
             resource_id=settings.volcengine_tts_resource_id,
             voice=settings.volcengine_tts_voice,
             timeout=settings.volcengine_tts_timeout,
         )
     if provider in ("openai", "azure"):
-        if not settings.openai_api_key:
+        if not provider_value.get("api_key"):
             return _mock(MockTTSAdapter, requested_provider=provider)
-        return TTSAdapter(**_openai_kwargs(
-            model=settings.ai_tts_model,
-            base_url=settings.ai_tts_base_url,
-        ), voice=settings.ai_tts_voice)
+        return TTSAdapter(api_key=provider_value.get("api_key"), base_url=provider_value.get("base_url"), timeout=settings.openai_timeout, model=model, voice=settings.ai_tts_voice)
     if provider in ("disabled", "mock", ""):
         return _mock(MockTTSAdapter, requested_provider=provider)
     return _unknown(MockTTSAdapter, provider)
@@ -194,41 +223,55 @@ def get_ocr_adapter() -> BaseOCRAdapter:
 def ai_status() -> dict:
     """返回各 AI 服务的可用状态（供前端展示）。"""
     llm_adapter = get_llm_adapter()
+    prompt_master_adapter = get_llm_adapter("prompt_master")
     img_adapter = get_image_adapter()
     video_adapter = get_video_adapter()
     tts_adapter = get_tts_adapter()
+    llm_stage = stage_config("narration")
+    prompt_master_stage = stage_config("prompt_master")
+    image_stage = stage_config("image")
+    video_stage = stage_config("video")
+    voice_stage = stage_config("voice")
     return {
         "llm": {
             "provider": llm_adapter.provider,
-            "configured_provider": settings.ai_llm_provider,
+            "configured_provider": llm_stage.get("provider"),
             "available": llm_adapter.is_available(),
-            "model": settings.ai_llm_model,
+            "model": llm_stage.get("model"),
+        },
+        "prompt_master": {
+            "provider": prompt_master_adapter.provider,
+            "configured_provider": prompt_master_stage.get("provider"),
+            "available": prompt_master_adapter.is_available(),
+            "model": prompt_master_stage.get("model"),
+            "capabilities": prompt_master_adapter.capabilities(),
+            "is_mock": prompt_master_adapter.provider == "mock",
         },
         "image": {
             "provider": img_adapter.provider,
-            "configured_provider": settings.ai_image_provider,
+            "configured_provider": image_stage.get("provider"),
             "available": img_adapter.is_available(),
-            "model": settings.ai_image_model,
+            "model": image_stage.get("model"),
             "capabilities": img_adapter.capabilities(),
         },
         "video": {
             "provider": video_adapter.provider,
-            "configured_provider": settings.ai_video_provider,
+            "configured_provider": video_stage.get("provider"),
             "available": video_adapter.is_available(),
-            "model": settings.ai_video_model,
+            "model": video_stage.get("model"),
             "capabilities": video_adapter.capabilities(),
         },
         "tts": {
             "provider": tts_adapter.provider,
-            "configured_provider": settings.ai_tts_provider,
+            "configured_provider": voice_stage.get("provider"),
             "available": tts_adapter.is_available(),
-            "model": settings.ai_tts_model,
+            "model": voice_stage.get("model"),
             "voice": settings.ai_tts_voice,
             "capabilities": tts_adapter.capabilities(),
         },
         # 全局提示仅反映解说词、图片和视频这三项核心生成能力。TTS 可以
         # 独立保持 disabled/mock，用于演示或等待企业授权音色配置，不能因此
-        # 把已配置的 DeepSeek / MiniMax 误报为“未配置 AI Key”。
+        # 把已配置的 Kimi / MiniMax 误报为“未配置 AI Key”。
         "mock_mode": any(
             adapter.provider == "mock"
             for adapter in (llm_adapter, img_adapter, video_adapter)
@@ -240,12 +283,13 @@ def ai_status() -> dict:
 def tts_provider_info() -> list[dict]:
     """返回 TTS Provider 列表及能力。"""
     adapter = get_tts_adapter()
+    voice_stage = stage_config("voice")
     return [
         {
             "provider": adapter.provider,
             "available": adapter.is_available(),
             "capabilities": adapter.capabilities(),
-            "model": settings.ai_tts_model,
+            "model": voice_stage.get("model"),
             "is_mock": adapter.provider == "mock",
             "voices": adapter.list_voices() if hasattr(adapter, "list_voices") else [],
         }
@@ -255,12 +299,13 @@ def tts_provider_info() -> list[dict]:
 def image_provider_info() -> list[dict]:
     """返回图片渲染 Provider 列表及能力。"""
     adapter = get_image_adapter()
+    image_stage = stage_config("image")
     return [
         {
             "provider": adapter.provider,
             "available": adapter.is_available(),
             "capabilities": adapter.capabilities(),
-            "model": settings.ai_image_model,
+            "model": image_stage.get("model"),
             "is_mock": adapter.provider == "mock",
         }
     ]
@@ -288,26 +333,27 @@ def build_video_adapter(provider: str) -> BaseAIAdapter | None:
     provider="mock" 时返回 Mock 适配器（供演示/测试）。
     """
     provider = (provider or "").strip().lower()
+    configured = provider_config(provider)
     if provider == "seedance":
-        if not settings.seedance_api_key:
+        if not configured.get("api_key"):
             return None
         return SeedanceVideoAdapter(
-            api_key=settings.seedance_api_key,
-            base_url=settings.ai_video_base_url or settings.seedance_base_url,
+            api_key=configured.get("api_key"),
+            base_url=configured.get("base_url") or settings.ai_video_base_url or settings.seedance_base_url,
             timeout=settings.seedance_timeout,
-            model=settings.ai_video_model or settings.seedance_video_model,
+            model=configured.get("model") or settings.ai_video_model or settings.seedance_video_model,
             resolution=settings.seedance_video_resolution,
             poll_interval=settings.seedance_poll_interval,
             video_timeout=settings.seedance_video_timeout,
         )
     if provider == "minimax":
-        if not settings.minimax_api_key:
+        if not configured.get("api_key"):
             return None
         return MiniMaxH3VideoAdapter(
-            api_key=settings.minimax_api_key,
-            base_url=settings.minimax_base_url,
+            api_key=configured.get("api_key"),
+            base_url=configured.get("base_url") or settings.minimax_base_url,
             timeout=settings.minimax_timeout,
-            model=settings.minimax_video_model,
+            model=configured.get("model") or settings.minimax_video_model,
             resolution=settings.minimax_video_resolution,
             poll_interval=settings.minimax_video_poll_interval,
             video_timeout=settings.minimax_video_timeout,
@@ -318,19 +364,38 @@ def build_video_adapter(provider: str) -> BaseAIAdapter | None:
 
 
 def video_providers_info() -> list[dict]:
-    """返回全部可选视频 Provider（Seedance / MiniMax）的可用性与能力。"""
+    """返回当前产品开放的视频 Provider（Seedance；本地测试时可附带 Mock）。"""
     active = get_video_adapter()
     result = []
-    for provider, models in VIDEO_PROVIDER_MODELS.items():
+    # MiniMax 适配器仅为历史任务保留，不再暴露给新建视频任务。
+    for provider in ("seedance",):
+        models = VIDEO_PROVIDER_MODELS[provider]
         adapter = build_video_adapter(provider)
+        configured_model = provider_config(provider).get("model")
+        available_models = list(dict.fromkeys([configured_model, *models])) if configured_model else models
         result.append(
             {
                 "provider": provider,
                 "available": adapter is not None,
                 "capabilities": adapter.capabilities() if adapter else {},
-                "models": models,
-                "default_model": models[0],
+                "models": available_models,
+                "default_model": configured_model or models[0],
                 "is_active": active.provider == provider,
+                "is_mock": False,
+            }
+        )
+    # 仅在当前配置仍处于 disabled/mock 时展示本地演示入口，避免真实环境误用 Mock。
+    if active.provider == "mock":
+        mock = MockVideoAdapter(api_key="", timeout=settings.openai_timeout)
+        result.append(
+            {
+                "provider": "mock",
+                "available": True,
+                "capabilities": mock.capabilities(),
+                "models": ["local-demo"],
+                "default_model": "local-demo",
+                "is_active": True,
+                "is_mock": True,
             }
         )
     return result

@@ -4,6 +4,7 @@ import {
   Typography,
   Space,
   Button,
+  Dropdown,
   List,
   Tag,
   Empty,
@@ -13,19 +14,16 @@ import {
   InputNumber,
   Slider,
   Modal,
-  Alert,
   Progress,
   Segmented,
-  Popconfirm,
-  Drawer,
   Table,
   Divider,
   Badge,
   Radio,
+  Tooltip,
 } from 'antd'
 import {
   PlayCircleOutlined,
-  ReloadOutlined,
   CheckOutlined,
   SoundOutlined,
   DeleteOutlined,
@@ -34,6 +32,7 @@ import {
   ThunderboltOutlined,
   DownloadOutlined,
   FileTextOutlined,
+  MoreOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -142,7 +141,14 @@ export default function VoiceWorkspace() {
   const filteredShots = useMemo(() => {
     if (shotFilter === 'missing') return shots.filter((s) => !s.audio_asset_id)
     if (shotFilter === 'generating') return shots.filter((s) => s.status === 'ai_generating')
-    if (shotFilter === 'needs_adjust') return shots.filter((s) => true) // 由版本状态决定，简化处理
+    if (shotFilter === 'needs_adjust') {
+      return shots.filter((s) =>
+        s.audio_is_stale ||
+        s.audio_duration_status === 'script_adjustment_required' ||
+        s.audio_quality_status === 'warning' ||
+        s.audio_quality_status === 'failed',
+      )
+    }
     return shots
   }, [shots, shotFilter])
 
@@ -245,28 +251,19 @@ export default function VoiceWorkspace() {
 
   return (
     <div>
-      <div className="page-header">
-        <Title level={4} style={{ marginBottom: 4 }}>
-          配音制作
-        </Title>
-        <Space>
-          <Text type="secondary">解说词 → 朗读规范化 → AI 配音 → 版本管理 → 字幕生成</Text>
-        </Space>
+      <div className="page-header workspace-page-header">
+        <div className="page-heading">
+          <Title level={3} style={{ marginBottom: 6 }}>
+            配音制作
+          </Title>
+          <Text type="secondary" className="page-description">
+            解说词 → 朗读规范化 → AI 配音 → 版本管理 → 字幕生成
+          </Text>
+        </div>
       </div>
 
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message={
-          provider === 'mock'
-            ? '当前为 Mock 演示模式：使用提示音模拟句子，非真实朗读。正式导出前请配置真实 TTS Provider 并确认音色授权。'
-            : '当前使用真实 TTS Provider。正式导出将校验音色授权状态。'
-        }
-      />
-
       {/* 顶部操作栏 */}
-      <Space wrap style={{ marginBottom: 12 }}>
+      <Space wrap className="workspace-toolbar">
         <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setBatchModalOpen(true)}>
           批量生成配音
         </Button>
@@ -276,15 +273,19 @@ export default function VoiceWorkspace() {
         <Button icon={<FileTextOutlined />} onClick={() => navigate(`/project/${projectId}/voice-templates`)}>
           配音模板管理
         </Button>
-        <Button icon={<DownloadOutlined />} onClick={() => downloadVoiceFile(projectId, 'wav')}>
-          导出全部 WAV
-        </Button>
-        <Button icon={<DownloadOutlined />} onClick={() => downloadVoiceFile(projectId, 'mp3')}>
-          导出全部 MP3
-        </Button>
-        <Button icon={<FileTextOutlined />} onClick={() => downloadVoiceFile(projectId, 'srt')}>
-          导出项目 SRT
-        </Button>
+        <Dropdown
+          menu={{
+            items: [
+              { key: 'wav', icon: <DownloadOutlined />, label: '导出全部 WAV' },
+              { key: 'mp3', icon: <DownloadOutlined />, label: '导出全部 MP3' },
+              { key: 'srt', icon: <FileTextOutlined />, label: '导出项目 SRT' },
+            ],
+            onClick: ({ key }) => downloadVoiceFile(projectId, key as 'wav' | 'mp3' | 'srt'),
+          }}
+        >
+          <Button icon={<DownloadOutlined />}>导出</Button>
+        </Dropdown>
+        <span className="toolbar-spacer" />
         {recentJobs.some((j) => j.task_type === 'tts_batch' && (j.status === 'running' || j.status === 'queued')) && (
           <Badge status="processing" text="批量任务进行中" />
         )}
@@ -296,10 +297,10 @@ export default function VoiceWorkspace() {
           ))}
       </Space>
 
-      <Card styles={{ body: { padding: 0 } }} style={{ height: 'calc(100vh - 260px)' }}>
-        <div style={{ display: 'flex', height: '100%' }}>
+      <Card className="workspace-shell voice-workspace-shell">
+        <div className="workspace-split-layout">
           {/* 左侧：分镜列表 */}
-          <div style={{ width: 260, borderRight: '1px solid #f0f0f0', padding: 12, overflowY: 'auto' }}>
+          <div className="workspace-sidebar voice-sidebar">
             <Space direction="vertical" style={{ width: '100%' }}>
               <Segmented
                 size="small"
@@ -316,13 +317,8 @@ export default function VoiceWorkspace() {
                 dataSource={filteredShots}
                 renderItem={(s) => (
                   <List.Item
+                    className={`workspace-list-item ${selectedShot?.id === s.id ? 'is-selected' : ''}`}
                     onClick={() => handleSelectShot(s)}
-                    style={{
-                      cursor: 'pointer',
-                      background: selectedShot?.id === s.id ? '#e6f4ff' : undefined,
-                      padding: '6px 8px',
-                      borderRadius: 6,
-                    }}
                   >
                     <Space direction="vertical" size={0} style={{ width: '100%' }}>
                       <Space style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -347,60 +343,56 @@ export default function VoiceWorkspace() {
           </div>
 
           {/* 中间：配音编辑 */}
-          <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
+          <div className="workspace-main voice-workspace-main">
             {selectedShot ? (
               <>
-                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                  <Text strong>解说词 #{selectedShot.sequence}</Text>
-                  {selectedVersion?.is_mock && (
-                    <Tag color="orange">Mock Audio</Tag>
-                  )}
-                  {selectedVersion?.is_stale && (
-                    <Tag color="error">解说词已修改，需要重新生成配音</Tag>
-                  )}
-                </Space>
-                <Paragraph style={{ marginTop: 8, background: '#fafafa', padding: 8, borderRadius: 6 }}>
+                <div className="workspace-panel-heading">
+                  <div>
+                    <Text strong>解说词 #{selectedShot.sequence}</Text>
+                    <Text type="secondary">先确认朗读文本，再生成和管理配音版本</Text>
+                  </div>
+                  <Space size={6}>
+                    {selectedVersion?.is_mock && <Tag color="orange">Mock Audio</Tag>}
+                    {selectedVersion?.is_stale && <Tag color="error">解说词已修改，需要重新生成配音</Tag>}
+                  </Space>
+                </div>
+                <Text className="voice-read-label">原始解说词</Text>
+                <Paragraph className="voice-script-preview">
                   {selectedShot.narration || '（无解说词）'}
                 </Paragraph>
 
-                <Divider style={{ margin: '8px 0' }} />
-                <Text type="secondary" style={{ fontSize: 12 }}>规范化朗读文本（可人工修改，不影响原解说词）</Text>
-                <Input.TextArea
-                  rows={2}
-                  value={estimate?.normalized_text || ''}
-                  style={{ marginTop: 4 }}
-                  placeholder="加载估算以显示朗读文本…"
-                  onChange={(e) => setEstimate((prev) => (prev ? { ...prev, normalized_text: e.target.value } : prev))}
-                />
-
-                {/* 音频播放器 */}
-                <div style={{ marginTop: 12 }}>
-                  <audio
-                    ref={audioRef}
-                    controls
-                    src={selectedVersion?.audio_url}
-                    style={{ width: '100%' }}
+                <div className="voice-read-section">
+                  <Text className="voice-read-label">规范化朗读文本</Text>
+                  <Text className="voice-read-help">可人工修改，仅影响本次配音，不会改变原解说词。</Text>
+                  <Input.TextArea
+                    rows={2}
+                    value={estimate?.normalized_text || ''}
+                    style={{ marginTop: 8 }}
+                    placeholder="等待估算结果"
+                    onChange={(e) => setEstimate((prev) => (prev ? { ...prev, normalized_text: e.target.value } : prev))}
                   />
                 </div>
 
-                {/* 波形 */}
-                {selectedVersion?.waveform_data?.points ? (
-                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 1, height: 40 }}>
-                    {(selectedVersion.waveform_data.points as number[]).map((p, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          flex: 1,
-                          height: Math.max(2, Math.round(p * 40)),
-                          background: '#1677ff',
-                          borderRadius: 1,
-                        }}
-                      />
-                    ))}
+                <div className="voice-audio-panel">
+                  <div className="voice-audio-player">
+                    <audio
+                      ref={audioRef}
+                      controls
+                      src={selectedVersion?.audio_url}
+                      style={{ width: '100%' }}
+                    />
                   </div>
-                ) : (
-                  <Empty description="生成配音后显示波形" style={{ margin: '8px 0' }} />
-                )}
+
+                  {selectedVersion?.waveform_data?.points ? (
+                    <div className="voice-waveform">
+                      {(selectedVersion.waveform_data.points as number[]).map((p, i) => (
+                        <div key={i} style={{ height: Math.max(2, Math.round(p * 40)) }} />
+                      ))}
+                    </div>
+                  ) : (
+                    <Empty description="生成配音后显示波形" style={{ margin: '8px 0' }} />
+                  )}
+                </div>
 
                 {/* 目标/实际时长对比 */}
                 <Space wrap style={{ marginTop: 8 }}>
@@ -414,7 +406,9 @@ export default function VoiceWorkspace() {
                   )}
                 </Space>
                 {estimate?.suggestion && (
-                  <Alert type="info" showIcon style={{ marginTop: 8 }} message={estimate.suggestion} />
+                  <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                    {estimate.suggestion}
+                  </Text>
                 )}
 
                 <Divider style={{ margin: '12px 0' }} />
@@ -449,6 +443,7 @@ export default function VoiceWorkspace() {
                 <Text strong>配音版本</Text>
                 {versions.length === 0 && <Empty description="暂无配音版本" style={{ margin: '8px 0' }} />}
                 <Table
+                  className="workspace-data-table"
                   size="small"
                   rowKey="id"
                   style={{ marginTop: 8 }}
@@ -501,10 +496,31 @@ export default function VoiceWorkspace() {
                               设为正式
                             </Button>
                           )}
-                          <Button size="small" icon={<HistoryOutlined />} onClick={() => handleRestoreVersion(v)} />
-                          <Popconfirm title="删除该版本？" onConfirm={() => handleDeleteVersion(v)}>
-                            <Button size="small" danger icon={<DeleteOutlined />} />
-                          </Popconfirm>
+                          <Dropdown
+                            trigger={['click']}
+                            menu={{
+                              items: [
+                                { key: 'restore', icon: <HistoryOutlined />, label: '恢复版本' },
+                                { type: 'divider' },
+                                { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除版本' },
+                              ],
+                              onClick: ({ key }) => {
+                                if (key === 'restore') handleRestoreVersion(v)
+                                if (key === 'delete') {
+                                  Modal.confirm({
+                                    title: '删除该版本？',
+                                    content: '删除后无法恢复，请确认仍要继续。',
+                                    okText: '删除',
+                                    okType: 'danger',
+                                    cancelText: '取消',
+                                    onOk: () => handleDeleteVersion(v),
+                                  })
+                                }
+                              },
+                            }}
+                          >
+                            <Button size="small" icon={<MoreOutlined />} aria-label={`V${v.version_number} 更多操作`} title="更多操作" />
+                          </Dropdown>
                         </Space>
                       ),
                     },
@@ -517,8 +533,13 @@ export default function VoiceWorkspace() {
           </div>
 
           {/* 右侧：模板参数 */}
-          <div style={{ width: 300, borderLeft: '1px solid #f0f0f0', padding: 12, overflowY: 'auto' }}>
-            <Text strong>配音模板</Text>
+          <div className="workspace-inspector voice-inspector">
+            <div className="workspace-panel-heading workspace-panel-heading-compact">
+              <div>
+                <Text strong>配音模板</Text>
+                <Text type="secondary">选择音色并调整朗读参数</Text>
+              </div>
+            </div>
             <Select
               style={{ width: '100%', marginTop: 8 }}
               placeholder="选择配音模板"
@@ -539,17 +560,30 @@ export default function VoiceWorkspace() {
               style={{ marginTop: 8 }}
               initialValues={{ speed: 1.0, pitch: 1.0, volume: 1.0, pause_strength: 1.0 }}
             >
-              <Form.Item label={`语速：${selectedSpeed}`}>
+              <Text className="workspace-section-label">音色参数</Text>
+              <Form.Item label={`语速：${selectedSpeed}${!providerCaps.speed_control ? '（当前 Provider 不支持）' : ''}`}>
                 <Form.Item name="speed" noStyle>
                   <Slider min={0.85} max={1.2} step={0.01} disabled={!providerCaps.speed_control} />
                 </Form.Item>
               </Form.Item>
-              <Form.Item label="音调" tooltip="Mock 模式不支持，保持默认">
+              <Form.Item
+                label={
+                  <Tooltip title={!providerCaps.pitch_control ? '当前 Provider 不提供音调控制，已保持默认值。' : ''}>
+                    音调{!providerCaps.pitch_control ? '（当前 Provider 不支持）' : ''}
+                  </Tooltip>
+                }
+              >
                 <Form.Item name="pitch" noStyle>
                   <Slider min={0.5} max={1.5} step={0.05} disabled={!providerCaps.pitch_control} />
                 </Form.Item>
               </Form.Item>
-              <Form.Item label="音量">
+              <Form.Item
+                label={
+                  <Tooltip title={!providerCaps.volume_control ? '当前 Provider 不提供音量控制，已保持默认值。' : ''}>
+                    音量{!providerCaps.volume_control ? '（当前 Provider 不支持）' : ''}
+                  </Tooltip>
+                }
+              >
                 <Form.Item name="volume" noStyle>
                   <Slider min={0} max={2} step={0.05} disabled={!providerCaps.volume_control} />
                 </Form.Item>
@@ -559,7 +593,13 @@ export default function VoiceWorkspace() {
                   <Slider min={0.3} max={2} step={0.1} />
                 </Form.Item>
               </Form.Item>
-              <Form.Item label="情绪">
+              <Form.Item
+                label={
+                  <Tooltip title={!providerCaps.emotion ? '当前 Provider 不提供情绪控制，已保持默认值。' : ''}>
+                    情绪{!providerCaps.emotion ? '（当前 Provider 不支持）' : ''}
+                  </Tooltip>
+                }
+              >
                 <Form.Item name="emotion" noStyle>
                   <Select
                     allowClear
@@ -580,7 +620,7 @@ export default function VoiceWorkspace() {
               预计时长：{estimate?.estimated_duration_seconds ?? '-'}s（目标 {estimate?.target_duration_seconds ?? '-'}s）
             </Text>
             {estimate && (
-              <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
+              <div className="voice-estimate-note">
                 字数 {estimate.char_count} · 建议语速 {estimate.recommended_speed_min}~{estimate.recommended_speed_max}
               </div>
             )}
@@ -594,13 +634,9 @@ export default function VoiceWorkspace() {
               disabled={!selectedShot}
               onClick={handleGenerate}
             >
-              生成 / 重新生成配音
+              生成配音
             </Button>
-            {!providerCaps.pitch_control && (
-              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-                * 当前 Provider 不支持音调/音量/情绪参数，已禁用。
-              </Text>
-            )}
+            {!selectedShot && <Text className="voice-inspector-help">请先在左侧选择一个分镜。</Text>}
           </div>
         </div>
       </Card>
@@ -613,12 +649,9 @@ export default function VoiceWorkspace() {
         onOk={handleBatch}
         okText="开始批量生成"
       >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="批量生成会为每个分镜创建独立任务，单个失败不影响其他分镜。"
-        />
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          批量生成会为每个分镜创建独立任务，单个失败不影响其他分镜。
+        </Text>
         <Form layout="vertical">
           <Form.Item label="时长适配策略">
             <Radio.Group
@@ -706,7 +739,9 @@ function SubtitleEditor({
   }
   return (
     <div>
-      <Alert type="info" showIcon style={{ marginBottom: 8 }} message="点击试听对应时间点；修改后防止重叠与超出音频时长。" />
+      <Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+        点击试听对应时间点，修改后防止重叠与超出音频时长。
+      </Text>
       <Table
         size="small"
         rowKey="sequence"

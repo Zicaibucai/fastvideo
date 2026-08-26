@@ -18,6 +18,7 @@ export interface Project {
   code?: string
   description?: string
   status: string
+  last_entered_at?: string
   bid_area?: number
   area_source_page?: number
   bid_deadline?: string
@@ -87,6 +88,7 @@ export interface DocumentPage {
 export interface DocumentChunk {
   id: string
   document_id: string
+  sequence: number
   page_start?: number
   page_end?: number
   heading_path?: string
@@ -122,10 +124,15 @@ export interface ExtractedFact {
   document_id?: string
   document_name?: string
   page_number?: number
+  source_order?: number
   location_label?: string
   fact_type: string
   fact_name: string
+  fact_label: string
   fact_value: string
+  scope?: string
+  category?: string
+  usage_status?: 'confirmed' | 'auto_usable' | 'review' | 'low_confidence' | 'conflict' | 'rejected'
   unit?: string
   source_quote?: string
   confidence: number
@@ -184,16 +191,16 @@ export interface StoryboardShot {
   source_references?: SourceReference[]
   scoring_point_ids?: string[]
   fact_check_status?: string
-  image_asset_id?: string
   video_asset_id?: string
   audio_asset_id?: string
+  audio_duration_status?: string
+  audio_quality_status?: string
+  audio_is_stale?: boolean
   tts_voice_id?: string
   video_clip_key?: string
-  source_model_asset_id?: string
-  render_version_id?: string
-  visual_review_status?: string
-  visual_history?: any[]
   status: string
+  is_active?: boolean
+  revision?: number
   versions?: ShotVersion[]
   created_at: string
 }
@@ -209,6 +216,7 @@ export interface ShotVersion {
 
 export interface StoryboardSummary {
   shot_count: number
+  beat_count?: number
   total_duration_seconds: number
   total_narration_characters: number
   scoring_coverage_rate: number
@@ -218,6 +226,21 @@ export interface StoryboardSummary {
   fact_status_counts: Record<string, number>
 }
 
+export interface NarrationBeat {
+  id: string
+  project_id: string
+  shot_id?: string
+  sequence: number
+  shot_sequence: number
+  narration: string
+  start_time: number
+  end_time: number
+  evidence_ids?: string[]
+  source_references?: SourceReference[]
+  fact_check_status: string
+  status: string
+}
+
 export interface Asset {
   id: string
   project_id?: string
@@ -225,6 +248,7 @@ export interface Asset {
   asset_type: string
   source: string
   file_key?: string
+  thumbnail_key?: string
   url?: string
   file_size: number
   mime_type?: string
@@ -233,6 +257,8 @@ export interface Asset {
   duration_seconds?: number
   prompt?: string
   tags?: string[]
+  meta?: Record<string, any>
+  project_stage?: string
   created_at: string
 }
 
@@ -241,6 +267,7 @@ export interface RenderTask {
   project_id?: string
   shot_id?: string
   task_type: string
+  params?: Record<string, any>
   status: string
   progress: number
   attempts: number
@@ -443,8 +470,8 @@ export interface VideoSegment {
   audio_version_id?: string
   duration: number
   is_locked: boolean
-  visual_motion: string
   fit_mode: string
+  time_adaptation?: string
   transition_type: string
   transition_duration: number
   subtitle_enabled: boolean
@@ -460,6 +487,8 @@ export interface VideoSegment {
   shot_title?: string
   narration?: string
   visual_url?: string
+  visual_source_duration?: number
+  visual_playback_speed?: number
   audio_url?: string
   has_visual: boolean
   has_audio: boolean
@@ -516,6 +545,24 @@ export interface AiStatus {
   tts_mock_mode?: boolean
 }
 
+export interface AIProviderSetting {
+  provider: string
+  label: string
+  kind: string
+  base_url: string
+  model: string
+  api_key_set: boolean
+  api_key_hint: string
+  api_key_warning?: string
+  api_key?: string
+}
+
+export interface AIConfiguration {
+  providers: AIProviderSetting[]
+  stages: Record<string, { provider?: string; model?: string }>
+  stage_options: Record<string, string>
+}
+
 export interface Page<T> {
   items: T[]
   total: number
@@ -568,7 +615,6 @@ export interface SourceImage {
 export interface RenderJobTask {
   id: string
   project_id: string
-  storyboard_shot_id?: string
   source_asset_id?: string
   preset_id?: string
   operation_type: string
@@ -592,7 +638,7 @@ export interface RenderJobTask {
   is_conceptual: boolean
   started_at?: string
   completed_at?: string
-  created_at?: any
+  created_at?: string
   version_count: number
 }
 
@@ -644,15 +690,37 @@ export interface VideoGenerationTemplate {
   created_by?: string
   sort_order: number
   created_at: string
+  category?: string
+  tags?: string[]
+  prompt_recipe?: Record<string, any>
+  preview_asset_id?: string
+  cover_asset_id?: string
+  preview_file_key?: string
+  cover_file_key?: string
+  scope?: string
+  status?: string
+  source_video_asset_id?: string
+  clip_start_seconds?: number
+  clip_end_seconds?: number
+  first_frame_asset_id?: string
+  middle_frame_asset_id?: string
+  last_frame_asset_id?: string
+  first_frame_file_key?: string
+  middle_frame_file_key?: string
+  last_frame_file_key?: string
+  reference_frame_asset_ids?: string[]
+  reference_frame_times?: number[]
+  reference_frame_count?: number
+  source_license_confirmed?: boolean
 }
 
 export interface VideoGenerationJob {
   id: string
   project_id: string
-  storyboard_shot_id?: string
   generation_mode: string
   first_frame_asset_id?: string
   last_frame_asset_id?: string
+  reference_asset_ids?: string[]
   template_id?: string
   positive_prompt?: string
   negative_prompt?: string
@@ -672,12 +740,19 @@ export interface VideoGenerationJob {
   error_message?: string
   elapsed_seconds?: number
   result_asset_id?: string
+  asset_status?: 'processing' | 'ready' | 'failed'
   result_url?: string
+  quality_report?: {
+    fps?: number
+    duration_seconds?: number
+    warnings?: string[]
+    engineering_review?: { status?: string; checks?: { name: string; status: string }[]; note?: string }
+  }
   parameter_snapshot?: any
   created_by?: string
   started_at?: string
   completed_at?: string
-  created_at?: any
+  created_at?: string
   version_count: number
 }
 
@@ -685,6 +760,7 @@ export interface VideoGenerationVersion {
   id: string
   video_job_id: string
   result_asset_id?: string
+  name?: string
   result_url?: string
   version_number: number
   provider: string
@@ -696,14 +772,19 @@ export interface VideoGenerationVersion {
   parameter_snapshot?: any
   first_frame_asset_id?: string
   last_frame_asset_id?: string
+  reference_asset_ids?: string[]
+  quality_report?: {
+    fps?: number
+    duration_seconds?: number
+    warnings?: string[]
+    engineering_review?: { status?: string; checks?: { name: string; status: string }[]; note?: string }
+  }
   template_id?: string
   is_selected: boolean
   selected_by?: string
   selected_at?: string
-  bound_shot_id?: string
-  bound_shot_title?: string
   is_deleted: boolean
-  created_at?: any
+  created_at?: string
 }
 
 export interface ReferenceImage {
@@ -718,5 +799,39 @@ export interface ReferenceImage {
   width?: number
   height?: number
   aspect_ratio?: string
-  created_at?: any
+  created_at?: string
+}
+
+export interface VideoTemplateDraft {
+  id: string
+  project_id: string
+  source_video_asset_id: string
+  source_video_name?: string
+  source_video_file_key?: string
+  source_video_duration_seconds?: number
+  name: string
+  description?: string
+  status: string
+  clip_start_seconds?: number
+  clip_end_seconds?: number
+  middle_seconds?: number
+  first_frame_asset_id?: string
+  middle_frame_asset_id?: string
+  last_frame_asset_id?: string
+  first_frame_file_key?: string
+  middle_frame_file_key?: string
+  last_frame_file_key?: string
+  reference_frame_file_keys?: string[]
+  reference_frame_asset_ids?: string[]
+  reference_frame_times?: number[]
+  prompt_recipe?: Record<string, any>
+  analysis_warnings?: string[]
+  intent?: string
+  preview_job_id?: string
+  preview_asset_id?: string
+  preview_file_key?: string
+  template_id?: string
+  source_license_confirmed: boolean
+  created_at: string
+  updated_at: string
 }

@@ -231,11 +231,35 @@ def test_narration_generation_10_plus_shots(client, project_id, auth_headers):
     assert task["status"] == "success", f"生成失败: {task.get('error_message')}"
     result = task["result"]
     assert result["shot_count"] >= 10, f"应生成至少10个分镜，实际{result['shot_count']}"
+    run_id = result["stage_summary"]["run_id"]
+    from app.core.database import SessionLocal
+    from app.models.render_task import RenderTask
+
+    with SessionLocal() as db:
+        persisted_task = db.get(RenderTask, task_id)
+        assert persisted_task.params["task_id"] == task_id
+        assert persisted_task.params["evidence_run_id"] == run_id
+    evidence_run = client.get(
+        f"/api/v1/projects/{project_id}/storyboard/evidence/runs/{run_id}",
+        headers=auth_headers,
+    ).json()
+    assert evidence_run["run"]["status"] == "completed"
+    assert evidence_run["run"]["total_batches"] >= 1
+    assert evidence_run["run"]["evidence_count"] >= 1
 
     shots = client.get(f"/api/v1/projects/{project_id}/storyboard", headers=auth_headers).json()
     assert len(shots) >= 10
     # 每个分镜应有解说词
     assert all(s["narration"] for s in shots)
+    summary = client.get(
+        f"/api/v1/projects/{project_id}/storyboard/summary", headers=auth_headers
+    ).json()
+    assert summary["beat_count"] >= len(shots)
+    beats = client.get(
+        f"/api/v1/projects/{project_id}/storyboard/beats", headers=auth_headers
+    ).json()
+    assert [beat["sequence"] for beat in beats] == list(range(1, len(beats) + 1))
+    assert all(beat["end_time"] > beat["start_time"] for beat in beats)
 
 
 def test_narration_prompt_uses_sourced_facts_and_document_excerpts(client, project_id, auth_headers):
@@ -265,6 +289,37 @@ def test_narration_prompt_uses_sourced_facts_and_document_excerpts(client, proje
     assert "45600" in prompt
     assert "文档原文摘录" in prompt
     assert "分区流水组织" in prompt
+
+
+def test_multi_stage_prompts_keep_evidence_and_writing_separate(client, project_id, auth_headers):
+    """先取证、后编排、再写作，避免模型直接用模板填满全文。"""
+    from app.core.database import SessionLocal
+    from app.services.narration_engine import (
+        EvidenceOutput,
+        _build_chapter_prompt,
+        _build_context,
+        _build_evidence_prompt,
+        _build_outline_prompt,
+        _fallback_outline,
+    )
+
+    db = SessionLocal()
+    try:
+        context = _build_context(db, project_id)
+        params = {"project_id": project_id, "target_duration_seconds": 540, "chars_per_minute": 215}
+        evidence_prompt = _build_evidence_prompt(params, context)
+        outline = _fallback_outline(params, EvidenceOutput())
+        outline_prompt = _build_outline_prompt(params, context, EvidenceOutput())
+        chapter_prompt = _build_chapter_prompt(params, context, outline.chapters[0], EvidenceOutput(), shot_start=1, shot_budget=2)
+    finally:
+        db.close()
+
+    assert "只做资料分析，不写解说词" in evidence_prompt
+    assert "来源文件和页码" in evidence_prompt
+    assert "此阶段只生成章节大纲，不写完整正文" in outline_prompt
+    assert "施工方案与施工推演：不少于总时长 70%" in outline_prompt
+    assert "每句话 8 至 26 个汉字左右" in chapter_prompt
+    assert "保驾护航" in chapter_prompt
 
 
 def test_mock_narration_reads_enriched_prompt_context():

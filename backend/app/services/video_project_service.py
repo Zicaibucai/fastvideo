@@ -2,7 +2,7 @@
 
 职责：
 - 分镜 ↔ 分段同步（sync-storyboard）
-- 素材选择（手动 > 绑定视频 > AI图 > 模型截图 > 占位卡）
+- 素材选择（仅视频工程分段显式选择图片/视频；未选择时使用占位卡）
 - 分段时长计算、input_hash 缓存
 - 单分镜渲染、全片合成、字幕/音乐/转场/Logo/片头片尾
 - 导出前检查（demo/formal 严格区分）、导出报告
@@ -11,7 +11,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
+import uuid
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -63,6 +66,198 @@ class VideoProjectError(Exception):
         super().__init__(message)
 
 
+def _persist_video_render_asset(
+    db: Session,
+    *,
+    project_id: str,
+    name_prefix: str,
+    owner_key: str,
+    storage_key: str,
+    data: bytes,
+    duration: float,
+    width: int,
+    height: int,
+    meta: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
+) -> Asset:
+    """把一次视频合成保存为素材库中的独立版本，不覆盖历史文件。"""
+    existing = (
+        db.query(Asset)
+        .filter(Asset.project_id == project_id, Asset.source == "render")
+        .all()
+    )
+    owned = [a for a in existing if (a.meta or {}).get("owner_key") == owner_key]
+    versions: list[int] = []
+    for item in owned:
+        try:
+            versions.append(int((item.meta or {}).get("version", 0)))
+        except (TypeError, ValueError):
+            versions.append(0)
+    version = max(versions + [0]) + 1
+    for previous in owned:
+        previous_meta = dict(previous.meta or {})
+        previous_meta["is_current"] = False
+        previous.meta = previous_meta
+
+    asset_meta = {
+        **(meta or {}),
+        "owner_key": owner_key,
+        "version": version,
+        "is_current": True,
+        "category": "视频工程合成",
+    }
+    asset = Asset(
+        project_id=project_id,
+        name=f"{name_prefix}·V{version}",
+        asset_type="video",
+        source="render",
+        file_key=storage_key,
+        file_size=len(data),
+        mime_type="video/mp4",
+        width=width,
+        height=height,
+        duration_seconds=round(duration, 3),
+        sha256=hashlib.sha256(data).hexdigest(),
+        project_stage="视频工程合成",
+        is_ai_generated=False,
+        generated_by="video_composer",
+        meta=asset_meta,
+        tags=tags or ["视频工程合成", "视频版本"],
+    )
+    db.add(asset)
+    db.flush()
+    return asset
+
+
+def backfill_video_render_assets(db: Session, project_id: str) -> int:
+    """为版本化功能上线前已经存在的成片补建素材库记录。
+
+    旧数据已经有 output_key，但没有 Asset 行；只在首次访问素材库时补一次，
+    不改动旧视频文件，也不会重复创建记录。
+    """
+    projects = db.query(VideoProject).filter(VideoProject.project_id == project_id).all()
+    existing_keys = {
+        asset.file_key
+        for asset in db.query(Asset).filter(
+            Asset.project_id == project_id,
+            Asset.source == "render",
+            Asset.file_key.isnot(None),
+        ).all()
+    }
+    created = 0
+
+    def _legacy_asset(
+        *,
+        vp: VideoProject,
+        storage_key: str,
+        owner_key: str,
+        name_prefix: str,
+        duration: float,
+        meta: dict[str, Any],
+        tags: list[str],
+    ) -> None:
+        nonlocal created
+        if not storage_key or storage_key in existing_keys or not storage.exists(storage_key):
+            return
+        try:
+            data = storage.load(storage_key)
+            info = probe_media(data, suffix=".mp4")
+            if info.get("decodable") is False:
+                return
+            _persist_video_render_asset(
+                db,
+                project_id=project_id,
+                name_prefix=name_prefix,
+                owner_key=owner_key,
+                storage_key=storage_key,
+                data=data,
+                duration=float(info.get("duration_seconds") or duration or 0),
+                width=int(info.get("width") or vp.width),
+                height=int(info.get("height") or vp.height),
+                meta={**meta, "legacy_backfill": True},
+                tags=tags,
+            )
+            existing_keys.add(storage_key)
+            created += 1
+        except Exception as exc:  # 历史文件损坏时不影响素材库正常打开
+            logger.warning("video_render_asset_backfill_failed", key=storage_key, error=str(exc))
+
+    for vp in projects:
+        segments = db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id).all()
+        for seg in segments:
+            if seg.render_status != "success" or not seg.output_key:
+                continue
+            _legacy_asset(
+                vp=vp,
+                storage_key=seg.output_key,
+                owner_key=f"segment:{vp.id}:{seg.id}",
+                name_prefix=f"视频工程·分段{seg.sequence}",
+                duration=seg.duration,
+                meta={
+                    "video_project_id": vp.id,
+                    "segment_id": seg.id,
+                    "sequence": seg.sequence,
+                    "render_engine": "legacy",
+                    "time_adaptation": seg.time_adaptation or "natural",
+                },
+                tags=["视频工程合成", "分段合成", f"分段{seg.sequence}", "历史成片"],
+            )
+
+        export_keys: set[str] = set()
+        for task in db.query(ExportTask).filter(
+            ExportTask.video_project_id == vp.id,
+            ExportTask.status == "success",
+        ).all():
+            if not task.output_key:
+                continue
+            export_keys.add(task.output_key)
+            mode = task.mode or "demo"
+            _legacy_asset(
+                vp=vp,
+                storage_key=task.output_key,
+                owner_key=f"export:{vp.id}:{mode}",
+                name_prefix=f"视频工程·{('正式' if mode == 'formal' else '演示')}成片",
+                duration=float(task.duration_seconds or vp.duration_seconds or 0),
+                meta={
+                    "video_project_id": vp.id,
+                    "export_task_id": task.id,
+                    "export_mode": mode,
+                    "kind": "final_video",
+                },
+                tags=["视频工程合成", "整片成片", "正式成片" if mode == "formal" else "演示成片", "历史成片"],
+            )
+        if vp.output_key and vp.output_key not in export_keys:
+            mode = vp.export_mode or "demo"
+            _legacy_asset(
+                vp=vp,
+                storage_key=vp.output_key,
+                owner_key=f"export:{vp.id}:{mode}",
+                name_prefix=f"视频工程·{('正式' if mode == 'formal' else '演示')}成片",
+                duration=float(vp.duration_seconds or 0),
+                meta={"video_project_id": vp.id, "export_mode": mode, "kind": "final_video"},
+                tags=["视频工程合成", "整片成片", "正式成片" if mode == "formal" else "演示成片", "历史成片"],
+            )
+
+    if created:
+        db.commit()
+    return created
+
+
+def _update_segment_task_progress(db: Session, segment_id: str, progress: int, message: str) -> None:
+    """同步分段记录与通知中心使用的 RenderTask 进度。"""
+    tasks = (
+        db.query(RenderTask)
+        .filter(RenderTask.task_type == "segment_render")
+        .order_by(RenderTask.created_at.desc())
+        .all()
+    )
+    for task in tasks:
+        if (task.params or {}).get("segment_id") == segment_id and task.status in {"queued", "running"}:
+            task.progress = progress
+            task.message = message
+            break
+
+
 # ============================================================
 # 同步分镜 → 分段
 # ============================================================
@@ -71,7 +266,7 @@ def sync_storyboard_to_video_project(db: Session, vp: VideoProject, user: User |
     """把项目分镜同步为视频分段（新增缺失分段，标记被删除分镜）。"""
     shots = (
         db.query(StoryboardShot)
-        .filter(StoryboardShot.project_id == vp.project_id)
+        .filter(StoryboardShot.project_id == vp.project_id, StoryboardShot.is_active.is_(True))
         .order_by(StoryboardShot.sequence.asc())
         .all()
     )
@@ -93,9 +288,34 @@ def sync_storyboard_to_video_project(db: Session, vp: VideoProject, user: User |
             db.add(seg)
             created += 1
         else:
+            # 清理不存在或不支持类型的遗留引用；图片和视频都可作为显式分段输入。
+            if seg.visual_asset_id:
+                current_visual = db.get(Asset, seg.visual_asset_id)
+                if not current_visual or current_visual.asset_type not in ("image", "video"):
+                    seg.visual_asset_id = None
+                    seg.needs_rebuild = True
+                    # 当前输入已失效，旧合成结果不能继续作为预览，避免切到缺失分段时播放上一版视频。
+                    seg.output_key = None
+                    seg.rendered_at = None
+                    seg.render_progress = 0
+                    if seg.render_status == "success":
+                        seg.render_status = "pending"
+                    updated += 1
             if seg.sequence != shot.sequence:
                 seg.sequence = shot.sequence
                 updated += 1
+            # 未锁定的分段始终跟随解说词分镜时长，避免配音/画面时间轴漂移。
+            if not seg.is_locked:
+                default_duration = _default_duration(db, shot)
+                if abs(seg.duration - default_duration) > 0.001:
+                    seg.duration = default_duration
+                    seg.needs_rebuild = True
+                    seg.output_key = None
+                    seg.rendered_at = None
+                    seg.render_progress = 0
+                    if seg.render_status == "success":
+                        seg.render_status = "pending"
+                    updated += 1
     # 已被删除的分镜 → 标记跳过
     valid_ids = {s.id for s in shots}
     for seg in existing.values():
@@ -106,15 +326,20 @@ def sync_storyboard_to_video_project(db: Session, vp: VideoProject, user: User |
     for seg in db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id).all():
         _auto_select_assets(db, seg)
     db.commit()
-    return {"created": created, "updated": updated, "segment_count": db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id).count()}
+    active_count = db.query(VideoSegment).filter(
+        VideoSegment.video_project_id == vp.id,
+        VideoSegment.render_status != "skipped",
+    ).count()
+    return {"created": created, "updated": updated, "segment_count": active_count}
 
 
 def _default_duration(db: Session, shot: StoryboardShot) -> float:
+    # 分段的默认时长以解说词分镜的明确时长为准；配音只作为旧数据/缺省数据兜底。
+    if shot.duration_seconds:
+        return _clamp_duration(shot.duration_seconds)
     audio = _selected_audio(db, shot)
     if audio and audio.actual_duration_seconds:
         return _clamp_duration(audio.actual_duration_seconds + PAUSE_LEAD + PAUSE_TAIL)
-    if shot.duration_seconds:
-        return _clamp_duration(shot.duration_seconds)
     return 5.0
 
 
@@ -137,14 +362,12 @@ def _selected_audio(db: Session, shot: StoryboardShot) -> AudioVersion | None:
 
 
 def _auto_select_assets(db: Session, seg: VideoSegment) -> None:
-    """自动选择画面与配音（不覆盖手动指定）。"""
+    """自动选择配音（画面素材必须在视频工程分段中显式选择）。"""
     if not seg.storyboard_shot_id:
         return
     shot = db.get(StoryboardShot, seg.storyboard_shot_id)
     if not shot:
         return
-    if not seg.visual_asset_id:
-        seg.visual_asset_id = shot.video_asset_id or shot.image_asset_id or shot.source_model_asset_id
     if not seg.audio_version_id:
         audio = _selected_audio(db, shot)
         if audio:
@@ -156,25 +379,13 @@ def _auto_select_assets(db: Session, seg: VideoSegment) -> None:
 # ============================================================
 
 def resolve_visual(db: Session, vp: VideoProject, seg: VideoSegment) -> tuple[bytes | None, str]:
-    """按优先级解析画面素材：手动 > 绑定视频 > AI图 > 模型截图 > 占位卡。"""
+    """解析视频工程分段显式选择的图片/视频素材，未选择时返回占位卡。"""
     asset_id = seg.visual_asset_id
     asset = db.get(Asset, asset_id) if asset_id else None
-    if asset and asset.file_key:
+    if asset and asset.asset_type in ("image", "video") and asset.file_key:
         data = storage.load(asset.file_key)
         if data:
-            kind = "video" if asset.asset_type == "video" else "image"
-            return data, kind
-    if not asset and seg.storyboard_shot_id:
-        shot = db.get(StoryboardShot, seg.storyboard_shot_id)
-        if shot:
-            for aid in (shot.video_asset_id, shot.image_asset_id, shot.source_model_asset_id):
-                if aid:
-                    a = db.get(Asset, aid)
-                    if a and a.file_key:
-                        data = storage.load(a.file_key)
-                        if data:
-                            kind = "video" if a.asset_type == "video" else "image"
-                            return data, kind
+            return data, asset.asset_type
     return None, "placeholder"
 
 
@@ -222,7 +433,7 @@ def resolve_subtitles(db: Session, seg: VideoSegment) -> list[dict]:
 # ============================================================
 
 def compute_segment_input_hash(db: Session, vp: VideoProject, seg: VideoSegment) -> str:
-    """计算分段输入哈希：画面/配音/字幕/时长/运动/转场/分辨率/fps/字幕样式/Logo。"""
+    """计算分段输入哈希：视频/配音/字幕/时长/补帧策略/转场/分辨率/fps/字幕样式/Logo。"""
     visual_id = seg.visual_asset_id
     visual_sha = None
     if visual_id:
@@ -242,8 +453,8 @@ def compute_segment_input_hash(db: Session, vp: VideoProject, seg: VideoSegment)
         audio_sha256=audio_sha,
         subtitle_text=json.dumps(subs, ensure_ascii=False),
         duration=seg.duration,
-        motion=seg.visual_motion,
         fit_mode=seg.fit_mode,
+        time_adaptation=seg.time_adaptation or "natural",
         transition_type=seg.transition_type,
         transition_duration=seg.transition_duration,
         subtitle_enabled=seg.subtitle_enabled,
@@ -287,12 +498,16 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
 
     seg.render_status = "running"
     seg.render_progress = 10
+    _update_segment_task_progress(db, segment_id, 10, "开始读取分段素材…")
     db.commit()
 
     duration = _clamp_duration(seg.duration)
     w, h, fps = vp.width or 1920, vp.height or 1080, vp.fps or 25
     audio_bytes, ver = resolve_audio(db, vp, seg)
     subs = resolve_subtitles(db, seg)
+    seg.render_progress = 20
+    _update_segment_task_progress(db, segment_id, 20, "配音与字幕已读取…")
+    db.commit()
 
     with __import__("tempfile").TemporaryDirectory(prefix="fv_seg_") as td:
         from pathlib import Path
@@ -306,18 +521,43 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
             ass_path = str(ass_file)
 
         visual_bytes, kind = resolve_visual(db, vp, seg)
+        seg.render_progress = 30
+        _update_segment_task_progress(db, segment_id, 30, "开始合成视频画面…")
+        db.commit()
+
+        def _video_progress(progress: int, message: str) -> None:
+            """把 RIFE 的逐帧进度同步到分段和右下角通知中心。"""
+            seg.render_progress = max(30, min(79, int(progress)))
+            _update_segment_task_progress(db, segment_id, seg.render_progress, message)
+            db.commit()
+
         try:
-            if kind == "image":
-                data = render_image_segment(
-                    visual_bytes, duration=duration, motion=seg.visual_motion,
-                    fit_mode=seg.fit_mode, width=w, height=h, fps=fps,
-                    audio_bytes=audio_bytes, volume=seg.volume, ass_path=ass_path,
-                )
-            elif kind == "video":
+            render_engine = "title_card"
+            if kind == "video":
+                adaptation = seg.time_adaptation or "natural"
+                render_engine = {
+                    "rife": "rife",
+                    "interpolate": "ffmpeg_minterpolate",
+                }.get(adaptation, "ffmpeg")
                 data = render_video_segment(
                     visual_bytes, duration=duration, fit_mode=seg.fit_mode,
-                    motion=seg.visual_motion, width=w, height=h, fps=fps,
+                    width=w, height=h, fps=fps,
                     audio_bytes=audio_bytes, volume=seg.volume, short_video="loop",
+                    time_adaptation=adaptation,
+                    progress_callback=_video_progress,
+                )
+            elif kind == "image":
+                render_engine = "ken_burns"
+                data = render_image_segment(
+                    visual_bytes,
+                    duration=duration,
+                    motion=seg.visual_motion or "zoom_in",
+                    fit_mode=seg.fit_mode,
+                    width=w,
+                    height=h,
+                    fps=fps,
+                    audio_bytes=audio_bytes,
+                    volume=seg.volume,
                 )
             else:
                 shot = db.get(StoryboardShot, seg.storyboard_shot_id) if seg.storyboard_shot_id else None
@@ -332,24 +572,57 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
             seg.render_status = "failed"
             seg.error_message = str(exc)[:2000]
             seg.render_progress = 0
+            _update_segment_task_progress(db, segment_id, 0, "分段合成失败")
             db.commit()
             raise VideoProjectError(f"分段渲染失败: {exc}")
 
         seg.render_progress = 80
+        _update_segment_task_progress(db, segment_id, 80, "画面合成完成，正在写入文件…")
         db.commit()
 
-        key = f"projects/{vp.project_id}/video_projects/{vp.id}/segments/{seg.id}.mp4"
-        storage.save(key, data)
-        seg.output_key = key
+        # 每次合成都写入独立版本；segment.output_key 只指向最新版本，历史版本保留在素材库。
+        version_key = (
+            f"projects/{vp.project_id}/video_projects/{vp.id}/segments/{seg.id}/versions/"
+            f"{time.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.mp4"
+        )
+        storage.save(version_key, data)
+        render_asset = _persist_video_render_asset(
+            db,
+            project_id=vp.project_id,
+            name_prefix=f"视频工程·分段{seg.sequence}",
+            owner_key=f"segment:{vp.id}:{seg.id}",
+            storage_key=version_key,
+            data=data,
+            duration=duration,
+            width=w,
+            height=h,
+            meta={
+                "video_project_id": vp.id,
+                "segment_id": seg.id,
+                "sequence": seg.sequence,
+                "render_engine": render_engine,
+                "time_adaptation": seg.time_adaptation or "natural",
+            },
+            tags=["视频工程合成", "分段合成", f"分段{seg.sequence}", render_engine],
+        )
+        seg.output_key = version_key
         seg.render_status = "success"
         seg.render_progress = 100
+        _update_segment_task_progress(db, segment_id, 100, "分段合成完成")
         seg.input_hash = compute_segment_input_hash(db, vp, seg)
         seg.needs_rebuild = False
         seg.error_message = None
         seg.rendered_at = time.strftime("%Y-%m-%d %H:%M:%S")
         db.commit()
 
-    return {"status": "success", "segment_id": segment_id, "output_key": key}
+    return {
+        "status": "success",
+        "segment_id": segment_id,
+        "output_key": version_key,
+        "render_engine": render_engine,
+        "asset_id": render_asset.id,
+        "version": (render_asset.meta or {}).get("version"),
+    }
 
 
 # ============================================================
@@ -373,6 +646,8 @@ def _is_mock_asset(db: Session, asset_id: str | None) -> bool:
 
 def preflight(db: Session, vp: VideoProject, mode: str = "demo") -> dict[str, Any]:
     """导出前检查。mode: demo | formal。"""
+    # 导出、预检和页面读取都自动校准当前活动分镜，不再依赖用户点击“同步分镜”。
+    sync_storyboard_to_video_project(db, vp)
     issues: list[dict] = []
     segs = (
         db.query(VideoSegment)
@@ -394,10 +669,6 @@ def preflight(db: Session, vp: VideoProject, mode: str = "demo") -> dict[str, An
             })
         elif mode == "formal":
             effective_visual_id = seg.visual_asset_id
-            if not effective_visual_id and shot:
-                effective_visual_id = (
-                    shot.video_asset_id or shot.image_asset_id or shot.source_model_asset_id
-                )
             if _is_mock_asset(db, effective_visual_id):
                 issues.append({"level": "error", "code": "mock_visual", "message": f"分镜「{shot.title if shot else '?'}」使用 Mock 画面，正式导出禁止。"})
 
@@ -437,10 +708,19 @@ def preflight(db: Session, vp: VideoProject, mode: str = "demo") -> dict[str, An
         )
         .all()
     )
-    if facts and mode == "formal":
-        issues.append({"level": "error", "code": "unverified_facts", "message": f"存在 {len(facts)} 条未确认或冲突的工程参数，正式导出前请先确认。"})
-    elif facts:
-        issues.append({"level": "warning", "code": "unverified_facts", "message": f"存在 {len(facts)} 条未确认或冲突的工程参数。"})
+    # 高置信度候选可以自动进入解说词草稿；低置信度候选保留在台账但不阻塞
+    # 正式导出，避免用户必须逐条删除页码/序号。冲突项仍需处理；没有
+    # metadata_json 的旧记录保持原有严格行为。
+    blocking_facts = [
+        fact
+        for fact in facts
+        if fact.verification_status == "conflict"
+        or not fact.metadata_json
+    ]
+    if blocking_facts and mode == "formal":
+        issues.append({"level": "error", "code": "unverified_facts", "message": f"存在 {len(blocking_facts)} 条来源冲突或旧格式工程信息，正式导出前请先处理。"})
+    elif blocking_facts:
+        issues.append({"level": "warning", "code": "unverified_facts", "message": f"存在 {len(blocking_facts)} 条来源冲突或旧格式工程信息。"})
 
     # Logo
     if vp.logo_config and vp.logo_config.get("asset_id"):
@@ -481,6 +761,24 @@ def compose_project(db: Session, export_task_id: str) -> dict[str, Any]:
         raise VideoProjectError("视频工程不存在")
     mode = export_task.mode
 
+    check = preflight(db, vp, mode)
+    if mode == "formal" and not check["ok"]:
+        raise VideoProjectError("正式导出前检查未通过", check["issues"])
+
+    # 导出任务自己负责渲染脏分段，用户不需要先猜“生成缺失分段”按钮的含义。
+    # 正式模式若缺少真实素材已在上面的预检中阻断；演示模式允许明确标记的占位卡。
+    pending = (
+        db.query(VideoSegment)
+        .filter(
+            VideoSegment.video_project_id == vp.id,
+            VideoSegment.render_status != "skipped",
+        )
+        .order_by(VideoSegment.sequence.asc())
+        .all()
+    )
+    for segment in pending:
+        if segment.render_status != "success" or segment.needs_rebuild or not segment.output_key:
+            render_segment(db, segment.id)
     check = preflight(db, vp, mode)
     if mode == "formal" and not check["ok"]:
         raise VideoProjectError("正式导出前检查未通过", check["issues"])
@@ -585,8 +883,30 @@ def compose_project(db: Session, export_task_id: str) -> dict[str, Any]:
         report = build_export_report(db, vp, mode, check, items, final_total)
 
         # 保存
-        out_key = f"projects/{vp.project_id}/video_projects/{vp.id}/final_{mode}_{time.strftime('%Y%m%d%H%M%S')}.mp4"
+        # 时间戳只用于可读性，UUID 确保同一秒内重复导出也不会覆盖历史成片。
+        out_key = (
+            f"projects/{vp.project_id}/video_projects/{vp.id}/final_{mode}_"
+            f"{time.strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.mp4"
+        )
         storage.save(out_key, final_mp4)
+        export_asset = _persist_video_render_asset(
+            db,
+            project_id=vp.project_id,
+            name_prefix=f"视频工程·{('正式' if mode == 'formal' else '演示')}成片",
+            owner_key=f"export:{vp.id}:{mode}",
+            storage_key=out_key,
+            data=final_mp4,
+            duration=final_total,
+            width=w,
+            height=h,
+            meta={
+                "video_project_id": vp.id,
+                "export_task_id": export_task.id,
+                "export_mode": mode,
+                "kind": "final_video",
+            },
+            tags=["视频工程合成", "整片成片", "正式成片" if mode == "formal" else "演示成片"],
+        )
         srt_key = out_key.replace(".mp4", ".srt")
         storage.save(srt_key, srt_content.encode("utf-8"))
         report_key = out_key.replace(".mp4", "_report.json")
@@ -619,6 +939,8 @@ def compose_project(db: Session, export_task_id: str) -> dict[str, Any]:
             "acodec": info.get("acodec"),
             "srt_key": srt_key,
             "report_key": report_key,
+            "asset_id": export_asset.id,
+            "version": (export_asset.meta or {}).get("version"),
         }
 
 
@@ -751,7 +1073,6 @@ def build_export_report(db: Session, vp: VideoProject, mode: str, preflight_resu
             "title": shot.title if shot else None,
             "duration": seg.duration,
             "render_status": seg.render_status,
-            "visual_motion": seg.visual_motion,
             "fit_mode": seg.fit_mode,
             "transition_type": seg.transition_type,
             "subtitle_enabled": seg.subtitle_enabled,
@@ -797,7 +1118,10 @@ def create_export(db: Session, vp: VideoProject, mode: str, user: User | None = 
     db.add(et)
     db.flush()
     # 时间轴快照
-    segs = db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id).order_by(VideoSegment.sequence.asc()).all()
+    segs = db.query(VideoSegment).filter(
+        VideoSegment.video_project_id == vp.id,
+        VideoSegment.render_status != "skipped",
+    ).order_by(VideoSegment.sequence.asc()).all()
     items = []
     for s in segs:
         items.append({"shot_id": s.storyboard_shot_id, "duration": s.duration,

@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ColumnsType } from 'antd/es/table'
 import {
   Card,
   Typography,
   Button,
   Space,
+  Dropdown,
   Table,
+  List,
   Tag,
   Modal,
   Form,
@@ -12,16 +15,14 @@ import {
   InputNumber,
   App,
   Tooltip,
-  Popconfirm,
   Empty,
   Select,
-  Alert,
   Descriptions,
   Switch,
   Statistic,
   Row,
   Col,
-  Progress,
+  Segmented,
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -29,19 +30,20 @@ import {
   DeleteOutlined,
   HistoryOutlined,
   PictureOutlined,
-  SoundOutlined,
-  VideoCameraOutlined,
   UpOutlined,
   DownOutlined,
   SettingOutlined,
-  WarningOutlined,
   LinkOutlined,
   CopyOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons'
 import { useParams, useNavigate } from 'react-router-dom'
-import { storyboardApi, assetApi, voiceApi, scoringApi } from '../api'
-import type { StoryboardShot, VoiceTemplate, StoryboardSummary, SourceReference } from '../api/types'
-import { TaskTag, useTaskPolling } from '../components/TaskStatus'
+import { storyboardApi, scoringApi, taskApi } from '../api'
+import type { StoryboardShot, StoryboardSummary, RenderTask, NarrationBeat } from '../api/types'
+import { useTaskPolling } from '../components/TaskStatus'
+import { useProjectNotifications } from '../components/ProjectNotificationCenter'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -63,6 +65,37 @@ const FACT_STATUS_MAP: Record<string, { label: string; color: string }> = {
   conflict: { label: '冲突', color: 'volcano' },
 }
 
+type StoryboardViewMode = 'document' | 'preview' | 'storyboard'
+
+function formatTimecode(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds || 0))
+  const minutes = Math.floor(safeSeconds / 60)
+  const remaining = safeSeconds % 60
+  return `${minutes}:${String(remaining).padStart(2, '0')}`
+}
+
+function splitPreviewParagraphs(text: string) {
+  const sentences = (text || '')
+    .split(/(?<=[。！？；])/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+  if (sentences.length === 0 && text.trim()) return [text.trim()]
+
+  const paragraphs: string[] = []
+  let current = ''
+  for (const sentence of sentences) {
+    const next = current ? `${current}${sentence}` : sentence
+    if (current && next.length > 110) {
+      paragraphs.push(current)
+      current = sentence
+    } else {
+      current = next
+    }
+  }
+  if (current) paragraphs.push(current)
+  return paragraphs
+}
+
 export default function Storyboard() {
   const { projectId = '' } = useParams()
   const navigate = useNavigate()
@@ -72,13 +105,30 @@ export default function Storyboard() {
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [genTaskId, setGenTaskId] = useState<string | null>(null)
-  const [voices, setVoices] = useState<VoiceTemplate[]>([])
   const [editShot, setEditShot] = useState<StoryboardShot | null>(null)
   const [editForm] = Form.useForm()
+  const [addForm] = Form.useForm()
   const [genForm] = Form.useForm()
   const [genModalOpen, setGenModalOpen] = useState(false)
   const [historyShot, setHistoryShot] = useState<StoryboardShot | null>(null)
+  const [addModalOpen, setAddModalOpen] = useState(false)
   const [scoringNames, setScoringNames] = useState<Record<string, string>>({})
+  const [evidenceRunId, setEvidenceRunId] = useState<string | null>(null)
+  const [evidenceRun, setEvidenceRun] = useState<Record<string, any> | null>(null)
+  const [evidenceModalOpen, setEvidenceModalOpen] = useState(false)
+  const [failedTask, setFailedTask] = useState<RenderTask | null>(null)
+  const [viewMode, setViewMode] = useState<StoryboardViewMode>('document')
+  const [showShotMarkers, setShowShotMarkers] = useState(true)
+  const [showSubtitleBreaks, setShowSubtitleBreaks] = useState(false)
+  const [showSourceMarkers, setShowSourceMarkers] = useState(false)
+  const [beats, setBeats] = useState<NarrationBeat[]>([])
+  const [documentDrafts, setDocumentDrafts] = useState<Record<string, string>>({})
+  const [documentDirty, setDocumentDirty] = useState(false)
+  const [savingDocument, setSavingDocument] = useState(false)
+  const [resegmentModalOpen, setResegmentModalOpen] = useState(false)
+  const [resegmentForm] = Form.useForm()
+  const documentRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const { upsertNotice, removeNotice } = useProjectNotifications()
 
   const fetchShots = () => {
     setLoading(true)
@@ -90,35 +140,103 @@ export default function Storyboard() {
       .then(([shotsRes, summaryRes, scoringRes]) => {
         setShots(shotsRes.data)
         setSummary(summaryRes.data)
+        setDocumentDrafts(Object.fromEntries(shotsRes.data.map((shot) => [shot.id, shot.narration || ''])))
+        setDocumentDirty(false)
         const names: Record<string, string> = {}
         scoringRes.data.forEach((s) => (names[s.id] = s.title))
         setScoringNames(names)
       })
       .finally(() => setLoading(false))
+    storyboardApi.beats(projectId).then((res) => setBeats(res.data)).catch(() => setBeats([]))
   }
 
   useEffect(fetchShots, [projectId])
 
   useEffect(() => {
-    voiceApi.list(projectId).then((res) => setVoices(res.data)).catch(() => {})
+    taskApi.list({ project_id: projectId, task_type: 'gen_narration' }).then((res) => {
+      const latest = res.data[0]
+      if (!latest) return
+      if (latest.status === 'failed') setFailedTask(latest)
+      if (['queued', 'running', 'retry'].includes(latest.status)) {
+        setGenTaskId(latest.id)
+        setGenerating(true)
+      }
+    }).catch(() => {})
   }, [projectId])
 
   // 轮询生成任务
-  useTaskPolling(genTaskId, () => {
+  const generationTask = useTaskPolling(genTaskId, (task) => {
+    if (task.status === 'failed') {
+      setFailedTask(task)
+      setGenTaskId(null)
+      setGenerating(false)
+      message.error(task.error_message || '解说词生成中断，可继续处理')
+      return
+    }
+    const runId = task.result?.stage_summary?.run_id
+    if (runId) setEvidenceRunId(runId)
+    setFailedTask(null)
     setGenTaskId(null)
     setGenerating(false)
     fetchShots()
   })
 
+  const handleRetryGeneration = async () => {
+    if (!failedTask) return
+    try {
+      const res = await taskApi.retry(failedTask.id)
+      setFailedTask(null)
+      setGenerating(true)
+      setGenTaskId(res.data.id)
+      message.info('已从成功批次后继续处理…')
+    } catch {
+      // 拦截器已提示
+    }
+  }
+
+  const handleOpenEvidence = useCallback(async () => {
+    if (!evidenceRunId) return
+    try {
+      const res = await storyboardApi.evidenceRun(projectId, evidenceRunId)
+      setEvidenceRun(res.data)
+      setEvidenceModalOpen(true)
+    } catch {
+      // 拦截器已提示
+    }
+  }, [evidenceRunId, projectId])
+
+  const handleApproveEvidence = async () => {
+    if (!evidenceRunId) return
+    try {
+      const res = await storyboardApi.approveEvidence(projectId, evidenceRunId, undefined, true)
+      if (res.data.task_id) {
+        setGenTaskId(res.data.task_id)
+        setGenerating(true)
+        setEvidenceModalOpen(false)
+        message.info('证据已通过，正在继续生成解说词…')
+      }
+    } catch {
+      // 拦截器已提示
+    }
+  }
+
   const handleGenerate = () => {
     genForm.setFieldsValue({
-      section_count: 10,
+      section_count: 56,
       tone: '专业庄重',
-      target_duration_seconds: 300,
+      target_duration_seconds: 540,
       video_purpose: '投标答辩',
-      include_company_intro: true,
+      include_company_intro: false,
       include_construction_simulation: true,
-      chars_per_minute: 260,
+      chars_per_minute: 215,
+      generation_mode: 'multi_stage',
+      custom_requirements: '',
+      predefined_outline: '',
+      target_beat_count: 120,
+      evidence_batch_chars: 9000,
+      evidence_concurrency: 3,
+      evidence_auto_approve: true,
+      strict_fact_mode: true,
     })
     setGenModalOpen(true)
   }
@@ -150,6 +268,29 @@ export default function Storyboard() {
     })
   }
 
+  const handleAdd = () => {
+    addForm.setFieldsValue({
+      insert_at: shots.length + 1,
+      section: '施工方案',
+      duration_seconds: 20,
+      visual_type: 'bim_animation',
+      fact_check_status: 'unverified',
+    })
+    setAddModalOpen(true)
+  }
+
+  const handleAddSubmit = async () => {
+    const values = await addForm.validateFields()
+    try {
+      await storyboardApi.create(projectId, { ...values, sequence: values.insert_at })
+      message.success('分镜已添加')
+      setAddModalOpen(false)
+      fetchShots()
+    } catch {
+      // 拦截器已提示
+    }
+  }
+
   const handleSaveEdit = async () => {
     if (!editShot) return
     const values = await editForm.validateFields()
@@ -160,6 +301,62 @@ export default function Storyboard() {
       fetchShots()
     } catch {
       // 拦截器已提示
+    }
+  }
+
+  const handleDocumentInput = (shotId: string, event: { currentTarget: HTMLDivElement }) => {
+    const narration = (event.currentTarget.innerText || '').replace(/\u00a0/g, ' ')
+    setDocumentDrafts((current) => ({ ...current, [shotId]: narration }))
+    setDocumentDirty(true)
+  }
+
+  const handleSaveDocument = async () => {
+    const updates = shots.map((shot) => ({
+      shot_id: shot.id,
+      narration: (documentRefs.current[shot.id]?.innerText ?? documentDrafts[shot.id] ?? '').replace(/\u00a0/g, ' '),
+    }))
+    const changed = updates.filter((item) => item.narration !== (shots.find((shot) => shot.id === item.shot_id)?.narration || ''))
+    if (changed.length === 0) {
+      setDocumentDirty(false)
+      message.info('文稿没有新的修改')
+      return
+    }
+    setSavingDocument(true)
+    try {
+      const result = await storyboardApi.updateDocument(projectId, updates)
+      setDocumentDirty(false)
+      message.success(`已保存 ${result.data.updated_count} 个分镜，字幕断句已同步`)
+      fetchShots()
+    } catch {
+      // 拦截器已提示
+    } finally {
+      setSavingDocument(false)
+    }
+  }
+
+  const handleOpenResegment = () => {
+    if (documentDirty) {
+      message.warning('请先保存文稿，再让 AI 重新调整分镜')
+      return
+    }
+    resegmentForm.setFieldsValue({
+      target_shot_count: shots.length,
+      chars_per_minute: 215,
+      instructions: '',
+    })
+    setResegmentModalOpen(true)
+  }
+
+  const handleResegmentSubmit = async () => {
+    const values = await resegmentForm.validateFields()
+    setResegmentModalOpen(false)
+    setGenerating(true)
+    try {
+      const result = await storyboardApi.resegment(projectId, values)
+      setGenTaskId(result.data.task_id)
+      message.info('AI 正在根据正文重新调整分镜…')
+    } catch {
+      setGenerating(false)
     }
   }
 
@@ -209,37 +406,6 @@ export default function Storyboard() {
     }
   }
 
-  const handleGenImage = async (shot: StoryboardShot) => {
-    try {
-      await assetApi.aiImage(projectId, shot.id, shot.image_prompt || shot.visual_prompt)
-      message.success('画面生成任务已提交')
-      setTimeout(fetchShots, 3000)
-    } catch {
-      // 拦截器已提示
-    }
-  }
-
-  const handleGenTts = async (shot: StoryboardShot) => {
-    const voice = voices[0]
-    try {
-      await assetApi.aiTts(projectId, shot.id, voice?.voice_name || 'onyx', voice?.speed || 1)
-      message.success('配音生成任务已提交')
-      setTimeout(fetchShots, 3000)
-    } catch {
-      // 拦截器已提示
-    }
-  }
-
-  const handleGenVideo = async (shot: StoryboardShot) => {
-    try {
-      await assetApi.aiVideo(projectId, shot.id, shot.video_prompt || shot.visual_prompt, shot.duration_seconds || 5)
-      message.success('视频生成任务已提交')
-      setTimeout(fetchShots, 3000)
-    } catch {
-      // 拦截器已提示
-    }
-  }
-
   const handleDuplicate = async (shot: StoryboardShot) => {
     try {
       const newShot: Partial<StoryboardShot> = {
@@ -266,8 +432,99 @@ export default function Storyboard() {
   }
 
   const unverifiedShots = shots.filter((s) => s.fact_check_status === 'unverified' || s.fact_check_status === 'conflict').length
+  const beatsByShot = beats.reduce<Record<string, NarrationBeat[]>>((result, beat) => {
+    if (!beat.shot_id) return result
+    ;(result[beat.shot_id] ||= []).push(beat)
+    return result
+  }, {})
+  const draftNarration = (shot: StoryboardShot) => documentDrafts[shot.id] ?? shot.narration ?? ''
+  const shotStartTimes: Record<string, number> = {}
+  let timelineCursor = 0
+  shots.forEach((shot) => {
+    shotStartTimes[shot.id] = timelineCursor
+    timelineCursor += Number(shot.duration_seconds || 0)
+  })
+  const totalTimelineSeconds = timelineCursor
+  const previewParagraphs: { text: string; sectionBreak: boolean }[] = []
+  let previousPreviewSection: string | undefined
+  shots.forEach((shot) => {
+    const paragraphs = splitPreviewParagraphs(draftNarration(shot))
+    paragraphs.forEach((text, index) => {
+      previewParagraphs.push({
+        text,
+        sectionBreak: index === 0 && Boolean(previousPreviewSection && shot.section && shot.section !== previousPreviewSection),
+      })
+    })
+    previousPreviewSection = shot.section
+  })
 
-  const columns = [
+  const handleExportText = () => {
+    const content = previewParagraphs.map((paragraph) => paragraph.text).join('\n\n')
+    if (!content.trim()) {
+      message.info('当前没有可导出的正文')
+      return
+    }
+    const blob = new Blob([`\uFEFF${content}`], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = '解说词文稿.txt'
+    anchor.click()
+    URL.revokeObjectURL(url)
+    message.success('文稿已导出为 TXT')
+  }
+
+  useEffect(() => {
+    if (unverifiedShots > 0) {
+      upsertNotice({
+        key: 'storyboard:unverified',
+        tone: 'warning',
+        title: `${unverifiedShots} 个分镜包含未验证事实`,
+        description: '建议在参数台账中确认来源，或编辑分镜补充引用。',
+        action: (
+          <Button size="small" onClick={() => navigate(`/project/${projectId}/facts`)}>
+            前往参数台账
+          </Button>
+        ),
+      })
+    } else {
+      removeNotice('storyboard:unverified')
+    }
+  }, [navigate, projectId, removeNotice, unverifiedShots, upsertNotice])
+
+  useEffect(() => {
+    if (!evidenceRunId) {
+      removeNotice('storyboard:evidence')
+      return
+    }
+    upsertNotice({
+      key: 'storyboard:evidence',
+      tone: 'success',
+      title: '全文证据索引已建立',
+      description: '可以查看批次进度和解说词引用来源。',
+      action: <Button size="small" onClick={handleOpenEvidence}>查看证据与来源</Button>,
+    })
+  }, [evidenceRunId, handleOpenEvidence, removeNotice, upsertNotice])
+
+  useEffect(() => {
+    if (documentDirty) {
+      upsertNotice({
+        key: 'storyboard:document-dirty',
+        tone: 'warning',
+        title: '文稿有未保存修改',
+        description: '保存后才会同步分镜卡片、字幕和配音状态。',
+        action: (
+          <Button size="small" onClick={() => navigate(`/project/${projectId}/storyboard`)}>
+            返回解说词
+          </Button>
+        ),
+      })
+    } else {
+      removeNotice('storyboard:document-dirty')
+    }
+  }, [documentDirty, navigate, projectId, removeNotice, upsertNotice])
+
+  const columns: ColumnsType<StoryboardShot> = [
     {
       title: '序号',
       dataIndex: 'sequence',
@@ -276,8 +533,8 @@ export default function Storyboard() {
         <Space direction="vertical" size={0}>
           <b>{v}</b>
           <Space size={0}>
-            <Button size="small" type="text" icon={<UpOutlined />} onClick={() => handleMove(v - 1, -1)} />
-            <Button size="small" type="text" icon={<DownOutlined />} onClick={() => handleMove(v - 1, 1)} />
+            <Button aria-label="上移分镜" title="上移分镜" size="small" type="text" icon={<UpOutlined />} onClick={() => handleMove(v - 1, -1)} />
+            <Button aria-label="下移分镜" title="下移分镜" size="small" type="text" icon={<DownOutlined />} onClick={() => handleMove(v - 1, 1)} />
           </Space>
         </Space>
       ),
@@ -285,9 +542,10 @@ export default function Storyboard() {
     {
       title: '标题/解说词',
       dataIndex: 'narration',
+      className: 'storyboard-narration-column',
       render: (v: string, r: StoryboardShot) => (
-        <Space direction="vertical" size={2}>
-          <Space wrap>
+        <Space direction="vertical" size={4} className="storyboard-narration-cell">
+          <Space wrap size={[6, 4]}>
             {r.title && <b>{r.title}</b>}
             {r.section && <Tag color="blue">{r.section}</Tag>}
             <FactTag status={r.fact_check_status} />
@@ -297,10 +555,10 @@ export default function Storyboard() {
               </Tag>
             )}
           </Space>
-          <Text type="secondary" style={{ fontSize: 13 }} ellipsis={{ tooltip: v }}>
+          <Text type="secondary" className="storyboard-narration-text" ellipsis={{ tooltip: v }}>
             {v}
           </Text>
-          <Space size={4} wrap>
+          <Space size={[4, 2]} wrap>
             {r.duration_seconds && (
               <Text type="secondary" style={{ fontSize: 12 }}>
                 时长 {r.duration_seconds}s
@@ -327,9 +585,11 @@ export default function Storyboard() {
     {
       title: '来源页码',
       width: 90,
+      align: 'center' as const,
+      responsive: ['xl'],
       render: (_: unknown, r: StoryboardShot) => {
         const pages = (r.source_references || []).map((ref) => ref.page).filter(Boolean) as number[]
-        if (pages.length === 0) return <Text type="secondary">—</Text>
+        if (pages.length === 0) return <Text type="secondary">无</Text>
         return (
           <Space size={2} wrap>
             {[...new Set(pages)].slice(0, 3).map((p) => (
@@ -342,131 +602,226 @@ export default function Storyboard() {
       },
     },
     {
-      title: '画面',
-      dataIndex: 'image_asset_id',
-      width: 80,
-      render: (v: string) => (v ? <Tag color="green">已生成</Tag> : <Text type="secondary">—</Text>),
-    },
-    {
       title: '配音',
       dataIndex: 'audio_asset_id',
       width: 80,
-      render: (v: string) => (v ? <Tag color="purple">已生成</Tag> : <Text type="secondary">—</Text>),
+      align: 'center' as const,
+      responsive: ['xl'],
+      render: (v: string) => (v ? <Tag color="success">已生成</Tag> : <Text type="secondary">无</Text>),
     },
     {
       title: '操作',
-      width: 400,
+      width: 190,
       render: (_: unknown, r: StoryboardShot) => (
-        <Space wrap>
-          <Button size="small" onClick={() => handleEdit(r)}>编辑</Button>
-          <Button size="small" icon={<HistoryOutlined />} onClick={() => setHistoryShot(r)}>
-            版本
-          </Button>
-          <Button size="small" icon={<CopyOutlined />} onClick={() => handleDuplicate(r)}>
-            复制
-          </Button>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => handleRegenerate(r)}>
-            重生成
-          </Button>
-          <Button size="small" icon={<PictureOutlined />} onClick={() => handleGenImage(r)}>
-            画面
-          </Button>
-          <Button size="small" icon={<SoundOutlined />} onClick={() => handleGenTts(r)}>
-            配音
-          </Button>
-          <Button size="small" icon={<VideoCameraOutlined />} onClick={() => handleGenVideo(r)}>
-            视频
-          </Button>
-          <Popconfirm title="删除该分镜？" onConfirm={() => handleDelete(r.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+        <Space size={6} className="storyboard-actions">
+          <Button size="small" type="link" onClick={() => handleEdit(r)}>编辑</Button>
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            menu={{
+              items: [
+                { key: 'history', icon: <HistoryOutlined />, label: '版本历史' },
+                { key: 'duplicate', icon: <CopyOutlined />, label: '复制分镜' },
+                { type: 'divider' },
+                { key: 'regenerate', icon: <ReloadOutlined />, label: '重新生成解说词' },
+                { key: 'assets', icon: <PictureOutlined />, label: '前往素材工作区' },
+                { type: 'divider' },
+                { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除分镜' },
+              ],
+              onClick: ({ key }) => {
+                if (key === 'history') setHistoryShot(r)
+                if (key === 'duplicate') handleDuplicate(r)
+                if (key === 'regenerate') handleRegenerate(r)
+                if (key === 'assets') navigate(`/project/${projectId}/render`)
+                if (key === 'delete') {
+                  Modal.confirm({
+                    title: '删除该分镜？',
+                    content: '删除后无法恢复，请确认仍要继续。',
+                    okText: '删除',
+                    okType: 'danger',
+                    cancelText: '取消',
+                    onOk: () => handleDelete(r.id),
+                  })
+                }
+              },
+            }}
+          >
+            <Button size="small" icon={<MoreOutlined />}>更多 <DownOutlined /></Button>
+          </Dropdown>
         </Space>
       ),
     },
   ]
 
+  const documentEditor = (
+    <div className="narration-document-editor">
+      {shots.map((shot, index) => {
+        const shotBeats = beatsByShot[shot.id] || []
+        const previousSection = index > 0 ? shots[index - 1].section : undefined
+        return (
+          <div key={shot.id} className="narration-document-block">
+            {showShotMarkers && shot.section && shot.section !== previousSection && (
+              <div className="narration-document-section">{shot.section}</div>
+            )}
+            {showShotMarkers && (
+              <div className="narration-document-marker">
+                <Tag color="blue">镜头 {shot.sequence}</Tag>
+                <Text strong>{shot.title || '未命名分镜'}</Text>
+                <Text className="narration-document-timecode">{formatTimecode(shotStartTimes[shot.id])}</Text>
+                {shot.duration_seconds ? <Text type="secondary">预计 {shot.duration_seconds.toFixed(1)} 秒</Text> : null}
+                <FactTag status={shot.fact_check_status} />
+              </div>
+            )}
+            {!showShotMarkers && (
+              <div className="narration-document-time-only">{formatTimecode(shotStartTimes[shot.id])}</div>
+            )}
+            <div
+              ref={(node) => { documentRefs.current[shot.id] = node }}
+              className="narration-document-text"
+              contentEditable
+              suppressContentEditableWarning
+              spellCheck={false}
+              onInput={(event) => handleDocumentInput(shot.id, event)}
+            >
+              {draftNarration(shot)}
+            </div>
+            {showSubtitleBreaks && (
+              <div className="narration-subtitle-breaks">
+                {shotBeats.length > 0 ? shotBeats.map((beat) => (
+                  <span key={beat.id} className="narration-subtitle-beat">
+                    <span className="narration-subtitle-time">{formatTimecode(beat.start_time)}</span>
+                    {beat.narration}
+                  </span>
+                )) : <Text type="secondary">保存文稿后生成字幕断句</Text>}
+              </div>
+            )}
+            {showSourceMarkers && shot.source_references && shot.source_references.length > 0 && (
+              <div className="narration-document-sources">
+                <LinkOutlined />
+                {shot.source_references.slice(0, 4).map((ref, refIndex) => (
+                  <Tag key={`${shot.id}-source-${refIndex}`} color="geekblue">
+                    {ref.documentName || '来源'} {ref.page ? `P${ref.page}` : ref.locationLabel || ''}
+                  </Tag>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+
+  const previewEditor = (
+    <div className="narration-preview-editor">
+      <article className="narration-preview-text">
+        {previewParagraphs.map((paragraph, index) => (
+          <p
+            key={`preview-paragraph-${index}`}
+            className={paragraph.sectionBreak ? 'narration-preview-paragraph narration-preview-section-break' : 'narration-preview-paragraph'}
+          >
+            {paragraph.text}
+          </p>
+        ))}
+      </article>
+    </div>
+  )
+
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <div>
-          <Title level={4} style={{ marginBottom: 4 }}>
+      <div className="page-header storyboard-page-header">
+        <div className="page-heading">
+          <Title level={3} style={{ marginBottom: 6 }}>
             解说词与分镜
           </Title>
-          <Text type="secondary">
+          <Text type="secondary" className="page-description">
             AI 根据已确认的工程事实与评分点智能拆解解说词，支持来源跳转与人工编辑
           </Text>
         </div>
-        <Button type="primary" icon={<SettingOutlined />} onClick={handleGenerate} loading={generating}>
-          智能生成解说词
-        </Button>
+        <Space className="page-actions">
+          <Button icon={<PlusOutlined />} onClick={handleAdd}>添加分镜</Button>
+          <Button type="primary" icon={<SettingOutlined />} onClick={handleGenerate} loading={generating}>
+            智能生成解说词
+          </Button>
+        </Space>
       </div>
 
       {summary && (
-        <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={5}>
-            <Card size="small">
-              <Statistic title="分镜数" value={summary.shot_count} />
-            </Card>
-          </Col>
-          <Col span={5}>
-            <Card size="small">
-              <Statistic title="总时长" value={summary.total_duration_seconds} suffix="秒" />
-            </Card>
-          </Col>
-          <Col span={5}>
-            <Card size="small">
-              <Statistic title="总字数" value={summary.total_narration_characters} suffix="字" />
-            </Card>
-          </Col>
-          <Col span={5}>
-            <Card size="small">
-              <Statistic
-                title="评分点覆盖率"
-                value={Math.round(summary.scoring_coverage_rate * 100)}
-                suffix="%"
-                valueStyle={{ color: summary.scoring_coverage_rate > 0.5 ? '#52c41a' : '#faad14' }}
-              />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card size="small">
-              <Statistic title="未验证分镜" value={unverifiedShots} valueStyle={{ color: unverifiedShots > 0 ? '#cf1322' : '#52c41a' }} />
-            </Card>
-          </Col>
-        </Row>
+        <div className="storyboard-summary-grid">
+          <Card size="small" className="summary-card summary-card-blue">
+            <Statistic title="分镜数" value={summary.shot_count} />
+          </Card>
+          <Card size="small" className="summary-card summary-card-purple">
+            <Statistic title="总时长" value={summary.total_duration_seconds} suffix="秒" />
+          </Card>
+          <Card size="small" className="summary-card summary-card-neutral">
+            <Statistic title="总字数" value={summary.total_narration_characters} suffix="字" />
+          </Card>
+          <Card size="small" className="summary-card summary-card-orange">
+            <Statistic title="评分点覆盖率" value={Math.round(summary.scoring_coverage_rate * 100)} suffix="%" />
+          </Card>
+          <Card size="small" className="summary-card summary-card-green">
+            <Statistic title="未验证分镜" value={unverifiedShots} valueStyle={{ color: unverifiedShots > 0 ? '#C23A3A' : '#2F7D5B' }} />
+          </Card>
+        </div>
       )}
 
-      {unverifiedShots > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          icon={<WarningOutlined />}
-          style={{ marginBottom: 16 }}
-          message={`有 ${unverifiedShots} 个分镜包含未验证事实`}
-          description="未验证数据不会作为确定事实写入，建议在参数台账中确认来源，或编辑分镜补充引用。"
-        />
-      )}
-
-      <Card>
+      <Card className="storyboard-table-card" bodyStyle={{ padding: 0 }}>
         {shots.length === 0 ? (
-          <Empty description="暂无分镜，点击「智能生成解说词」由 AI 自动拆解">
+          <Empty className="storyboard-empty" description="暂无分镜，可先生成解说词或手动添加">
             <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleGenerate}>
               生成解说词
             </Button>
           </Empty>
         ) : (
+          <>
+            <div className="storyboard-editor-toolbar">
+              <Space wrap>
+                <Segmented
+                  value={viewMode}
+                  onChange={(value) => setViewMode(value as StoryboardViewMode)}
+                  options={[{ label: '连续文稿', value: 'document' }, { label: '文稿预览', value: 'preview' }, { label: '分镜卡片', value: 'storyboard' }]}
+                />
+                {viewMode === 'document' && (
+                  <>
+                    <Switch checked={showShotMarkers} onChange={setShowShotMarkers} checkedChildren="分镜" unCheckedChildren="分镜" />
+                    <Switch checked={showSubtitleBreaks} onChange={setShowSubtitleBreaks} checkedChildren="字幕" unCheckedChildren="字幕" />
+                    <Switch checked={showSourceMarkers} onChange={setShowSourceMarkers} checkedChildren="来源" unCheckedChildren="来源" />
+                    <Button type="primary" onClick={handleSaveDocument} loading={savingDocument} disabled={!documentDirty}>
+                      保存文稿
+                    </Button>
+                    <Button onClick={handleOpenResegment} disabled={documentDirty || generating}>
+                      AI重新分镜
+                    </Button>
+                  </>
+                )}
+                {viewMode === 'preview' && (
+                  <Button icon={<DownloadOutlined />} onClick={handleExportText}>
+                    导出文稿
+                  </Button>
+                )}
+              </Space>
+              {(viewMode === 'document' || viewMode === 'preview') && (
+                <Text type="secondary">
+                  {summary?.total_narration_characters || 0} 字 · 总时长 {formatTimecode(totalTimelineSeconds)}
+                  {viewMode === 'document' ? ` · ${summary?.beat_count || beats.length} 条字幕节拍` : ''}
+                </Text>
+              )}
+            </div>
+            {viewMode === 'document' ? documentEditor : viewMode === 'preview' ? previewEditor : (
           <Table<StoryboardShot>
             rowKey="id"
             loading={loading}
             dataSource={shots}
             columns={columns}
             pagination={false}
+            tableLayout="fixed"
+            className="storyboard-table"
             expandable={{
               expandedRowRender: (r) => (
                 <div style={{ padding: '0 8px' }}>
                   <Space direction="vertical" style={{ width: '100%' }} size={4}>
                     {r.visual_description && (
-                      <Text>🎬 画面：{r.visual_description}</Text>
+                      <Text>画面：{r.visual_description}</Text>
                     )}
                     {r.image_prompt && (
                       <Text type="secondary" style={{ fontSize: 12 }}>图片提示词：{r.image_prompt}</Text>
@@ -489,8 +844,39 @@ export default function Storyboard() {
               ),
             }}
           />
+            )}
+          </>
         )}
       </Card>
+
+      <Modal
+        title="AI 重新调整分镜"
+        open={resegmentModalOpen}
+        onOk={handleResegmentSubmit}
+        onCancel={() => setResegmentModalOpen(false)}
+        okText="开始调整"
+        confirmLoading={generating}
+        width={560}
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          正文保持不变，只重新划分镜头边界、章节标题和画面组织。已有画面素材会尽量保留。
+        </Text>
+        <Form form={resegmentForm} layout="vertical">
+          <Form.Item
+            name="target_shot_count"
+            label="目标分镜数量"
+            rules={[{ required: true, message: '请输入目标分镜数量' }]}
+          >
+            <InputNumber min={1} max={100} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="chars_per_minute" label="参考语速（字/分钟）">
+            <InputNumber min={120} max={400} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="instructions" label="调整要求">
+            <Input.TextArea rows={4} placeholder="例如：项目概况集中在前两镜，主体结构按施工顺序拆开，机电穿插单独成章。" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* 生成配置弹窗 */}
       <Modal
@@ -502,7 +888,20 @@ export default function Storyboard() {
         confirmLoading={generating}
         width={560}
       >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          将先核对资料，再编排章节、分章写作并复核事实。未能核实的内容不会写成确定结论。
+        </Text>
         <Form form={genForm} layout="vertical">
+          <Form.Item
+            name="predefined_outline"
+            label="预设解说词大纲"
+            extra="可选。填写后AI按你的顺序整理证据、编排章节和写稿；留空则根据标书原文标题、证据分布和施工逻辑自动提炼，不限定章节数量。"
+          >
+            <Input.TextArea
+              rows={8}
+              placeholder={'可留空自动提炼；或填写：\n1. 项目概况与总体部署\n2. 基坑土方与基础施工\n3. 主体结构与专业穿插'}
+            />
+          </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="target_duration_seconds" label="视频目标时长（秒）">
@@ -511,7 +910,7 @@ export default function Storyboard() {
             </Col>
             <Col span={12}>
               <Form.Item name="section_count" label="分镜数量">
-                <InputNumber min={6} max={30} style={{ width: '100%' }} />
+                <InputNumber min={8} max={100} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
@@ -530,6 +929,24 @@ export default function Storyboard() {
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
+              <Form.Item name="target_beat_count" label="旁白短句数量">
+                <InputNumber min={20} max={240} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="evidence_batch_chars" label="全文批次大小">
+                <InputNumber min={3000} max={16000} step={500} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="evidence_concurrency" label="证据批次并发数">
+            <InputNumber min={1} max={8} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="custom_requirements" label="额外要求">
+            <Input.TextArea rows={3} placeholder="例如：重点展开土方开挖、塔吊布置与机电穿插；结尾控制在 20 秒内" />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
               <Form.Item name="include_company_intro" label="包含企业介绍" valuePropName="checked">
                 <Switch />
               </Form.Item>
@@ -540,6 +957,103 @@ export default function Storyboard() {
               </Form.Item>
             </Col>
           </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="evidence_auto_approve" label="自动通过证据" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="strict_fact_mode" label="严格事实模式" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="全文证据审核"
+        open={evidenceModalOpen}
+        onCancel={() => setEvidenceModalOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setEvidenceModalOpen(false)}>关闭</Button>,
+          <Button key="approve" type="primary" onClick={handleApproveEvidence}>通过并继续生成</Button>,
+        ]}
+        width={760}
+      >
+        {evidenceRun && (
+          <>
+            <Descriptions size="small" column={3} bordered>
+              <Descriptions.Item label="运行状态">{evidenceRun.run?.status}</Descriptions.Item>
+              <Descriptions.Item label="批次进度">{evidenceRun.run?.completed_batches}/{evidenceRun.run?.total_batches}</Descriptions.Item>
+              <Descriptions.Item label="证据条数">{evidenceRun.run?.evidence_count}</Descriptions.Item>
+            </Descriptions>
+            <List
+              size="small"
+              dataSource={(evidenceRun.evidence || []).slice(0, 80)}
+              renderItem={(item: any) => (
+                <List.Item>
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Tag color="blue">{item.topic}</Tag>
+                      <Tag>{item.fact_check_status}</Tag>
+                      <Text type="secondary">{item.source_reference?.documentName || '来源文件'} {item.source_reference?.page ? `P${item.source_reference.page}` : item.source_reference?.locationLabel || ''}</Text>
+                    </Space>
+                    <Text>{item.fact}</Text>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        title="添加分镜"
+        open={addModalOpen}
+        onOk={handleAddSubmit}
+        onCancel={() => setAddModalOpen(false)}
+        okText="添加"
+        width={640}
+      >
+        <Form form={addForm} layout="vertical">
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="insert_at" label="插入位置" rules={[{ required: true, message: '请选择插入位置' }]}>
+                <InputNumber min={1} max={shots.length + 1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="duration_seconds" label="预计时长（秒）" rules={[{ required: true, message: '请输入时长' }]}>
+                <InputNumber min={1} max={120} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="title" label="分镜标题" rules={[{ required: true, message: '请输入标题' }]}>
+            <Input placeholder="例如：地下室结构施工" />
+          </Form.Item>
+          <Form.Item name="section" label="章节">
+            <Select options={SECTION_OPTIONS.map((s) => ({ label: s, value: s }))} />
+          </Form.Item>
+          <Form.Item name="narration" label="解说词" rules={[{ required: true, message: '请输入解说词' }]}>
+            <Input.TextArea rows={4} placeholder="写清施工对象、作业顺序和控制要点" />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="visual_type" label="画面类型">
+                <Select options={VISUAL_TYPES} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="fact_check_status" label="事实状态">
+                <Select options={Object.entries(FACT_STATUS_MAP).map(([k, v]) => ({ label: v.label, value: k }))} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="visual_description" label="画面描述">
+            <Input.TextArea rows={2} placeholder="例如：BIM 展示地下室分区、流水方向与吊装路线" />
+          </Form.Item>
         </Form>
       </Modal>
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Form, Input, Button, Tabs, App, Typography, Alert } from 'antd'
+import { Card, Form, Input, Button, Tabs, App, Typography } from 'antd'
 import { LockOutlined, MailOutlined, UserOutlined, BuildOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../stores/auth'
@@ -43,31 +43,22 @@ export default function Login() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #0f2b46 0%, #1d4ed8 100%)',
-      }}
-    >
-      <Card style={{ width: 420, borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.2)' }}>
+    <div className="login-shell">
+      <Card className="login-card">
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
-          <BuildOutlined style={{ fontSize: 40, color: '#1d4ed8' }} />
+          <div className="login-brand-lockup">
+            <div className="login-brand-name">微影</div>
+            <div className="login-brand-credit">由中建八局制作</div>
+          </div>
           <Title level={3} style={{ marginTop: 8 }}>
-            建筑工程AI投标视频平台
+            建设项目影像工作台
           </Title>
-          <Text type="secondary">招标文件 → 解说词 → AI画面 → 配音 → 投标视频</Text>
+          <Text type="secondary">从招标资料到投标成片</Text>
         </div>
 
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="演示账号"
-          description="admin@fastvideo.cn / admin123456（首次启动自动创建）"
-        />
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16, textAlign: 'center', fontSize: 12 }}>
+          演示账号：admin@fastvideo.cn / admin123456
+        </Text>
 
         <Tabs
           defaultActiveKey="login"

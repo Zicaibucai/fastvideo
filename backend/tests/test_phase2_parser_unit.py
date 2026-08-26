@@ -126,6 +126,31 @@ def test_docx_parse_headings_and_tables():
     assert len(heading_chunks) >= 2
 
 
+def test_docx_keeps_paragraph_table_paragraph_order_and_sequences():
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("第一段：先完成场地清理。")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "工序"
+    table.cell(0, 1).text = "基础"
+    table.cell(1, 0).text = "参数"
+    table.cell(1, 1).text = "分层开挖"
+    doc.add_paragraph("第三段：随后进入基础施工。")
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    parsed = parse_document_bytes(buf.getvalue(), "docx")
+    chunks = [chunk for chunk in parsed.chunks if chunk.content]
+    sequences = [chunk.sequence for chunk in chunks]
+    assert sequences == sorted(sequences)
+    assert len(sequences) == len(set(sequences))
+    table_index = next(i for i, chunk in enumerate(chunks) if chunk.chunk_type == "table")
+    first_index = next(i for i, chunk in enumerate(chunks) if "第一段" in chunk.content)
+    last_index = next(i for i, chunk in enumerate(chunks) if "第三段" in chunk.content)
+    assert first_index < table_index < last_index
+
+
 def test_txt_parse():
     content = "一、项目概况\n项目名称：测试项目\n建筑面积 10000 平方米。\n二、施工部署\n内容。\n"
     parsed = parse_document_bytes(content.encode("utf-8"), "txt")

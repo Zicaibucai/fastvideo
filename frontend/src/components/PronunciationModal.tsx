@@ -224,7 +224,7 @@ export default function PronunciationModal({
         <Button type="primary" icon={<ExperimentOutlined />} onClick={handleTest}>测试</Button>
       </Space.Compact>
       {testResult && (
-        <div style={{ marginTop: 8, background: '#fafafa', padding: 8, borderRadius: 6 }}>
+        <div style={{ marginTop: 8, background: '#F8FAFC', padding: 8, borderRadius: 6 }}>
           <div><b>朗读文本：</b>{testResult.normalized_text}</div>
           {testResult.warnings.length > 0 && (
             <Alert type="warning" showIcon style={{ marginTop: 4 }} message={testResult.warnings.join('；')} />

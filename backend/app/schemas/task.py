@@ -11,6 +11,7 @@ class RenderTaskOut(TimestampedModel):
     project_id: str | None
     shot_id: str | None
     task_type: str
+    params: dict | None
     status: str
     progress: int
     attempts: int

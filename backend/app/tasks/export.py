@@ -41,7 +41,7 @@ def _compose_video(params: dict[str, Any]) -> dict[str, Any]:
         # 收集分镜片段（按 timeline 或分镜序号）
         shots = (
             db.query(StoryboardShot)
-            .filter(StoryboardShot.project_id == vp.project_id)
+            .filter(StoryboardShot.project_id == vp.project_id, StoryboardShot.is_active.is_(True))
             .order_by(StoryboardShot.sequence.asc())
             .all()
         )

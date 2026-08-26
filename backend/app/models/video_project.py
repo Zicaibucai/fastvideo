@@ -21,7 +21,7 @@ class VideoProject(BaseModel):
 
     width: Mapped[int] = mapped_column(default=1920, nullable=False)
     height: Mapped[int] = mapped_column(default=1080, nullable=False)
-    fps: Mapped[int] = mapped_column(default=25, nullable=False)
+    fps: Mapped[int] = mapped_column(default=24, nullable=False)
     duration_seconds: Mapped[float | None] = mapped_column(nullable=True)
 
     # 分镜顺序快照 [{shot_id, sequence, duration, transition_type, transition_duration}]

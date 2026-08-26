@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
-  App,
   Alert,
+  App,
   Button,
   Card,
   Col,
@@ -10,11 +10,10 @@ import {
   Divider,
   Drawer,
   Empty,
-  FloatButton,
   Input,
   InputNumber,
-  List,
   Modal,
+  Popconfirm,
   Progress,
   Row,
   Segmented,
@@ -23,17 +22,17 @@ import {
   Switch,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
   Upload,
 } from 'antd'
 import {
   ArrowRightOutlined,
+  CheckCircleOutlined,
   CheckOutlined,
   ClearOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  LinkOutlined,
+  EditOutlined,
   LockOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -42,40 +41,209 @@ import {
   UnlockOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
-import { useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   assetApi,
   downloadAiVideo,
-  storyboardApi,
   videoGenApi,
 } from '../api'
+import { withAuthToken } from '../api/client'
 import type {
   ReferenceImage,
-  StoryboardShot,
   VideoGenerationJob,
   VideoGenerationTemplate,
   VideoGenerationVersion,
 } from '../api/types'
+import { readAiVideoDraft, saveAiVideoDraft } from '../utils/aiVideoDraft'
 
 const { Title, Text, Paragraph } = Typography
 
 const DURATION_OPTIONS = [5, 8, 10, 15]
 const RATIO_OPTIONS = ['adaptive', '16:9', '9:16', '4:3', '3:4', '1:1', '21:9']
 const RESOLUTION_OPTIONS = ['480p', '720p', '1080p']
+const normalizeResolution = (value: any, fallback = '720p') => {
+  const normalized = String(value || '').trim().toLowerCase()
+  return RESOLUTION_OPTIONS.includes(normalized) ? normalized : fallback
+}
 
-const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  queued: { label: '排队中', color: 'blue' },
-  running: { label: '生成中', color: 'processing' },
-  success: { label: '成功', color: 'success' },
-  failed: { label: '失败', color: 'error' },
-  cancelled: { label: '已取消', color: 'default' },
+// 分辨率由高级参数控制。提示词大师可能把“4K/超高清”等自然语言混进
+// 镜头描述，先清掉这些冲突词，再交给后端按 resolution 编译。
+const sanitizePromptResolution = (value: string) => {
+  let text = String(value || '').trim()
+  if (!text) return ''
+  const hadResolutionMention = /(?:分辨率|清晰度)\s*(?:为|是|设为|设置为|[:：=])?\s*(?:8k|4k|2k|1080p|720p|480p|超高清|高清)(?:画质|分辨率)?|(?:8k|4k|2k|1080p|720p|480p)\s*(?:画质|分辨率)?|(?:超高清|高清)(?:画质|分辨率)/i.test(text)
+  if (!hadResolutionMention) return text
+  text = text
+    .replace(/(?:分辨率|清晰度)\s*(?:为|是|设为|设置为|[:：=])?\s*(?:8k|4k|2k|1080p|720p|480p|超高清|高清)(?:画质|分辨率)?/gi, '')
+    .replace(/(?:8k|4k|2k|1080p|720p|480p)\s*(?:画质|分辨率)?/gi, '')
+    .replace(/(?:超高清|高清)(?:画质|分辨率)/gi, '')
+    .replace(/[（(]\s*[）)]/g, '')
+    .replace(/([，,；;。])\s*([，,；;。])+/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+  return text.replace(/^[，,；;。\s]+|[，,；;。\s]+$/g, '').trim()
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
   seedance: '即梦 Seedance',
-  minimax: 'MiniMax H3',
-  mock: 'Mock 演示',
+  minimax: '历史视频通道',
+  mock: '本地演示',
 }
+
+const templateAssetUrl = (fileKey?: string) => (fileKey ? withAuthToken(`/files/${fileKey}`) : undefined)
+
+const templateMode = (template: VideoGenerationTemplate) => {
+  const modes = template.applicable_modes || []
+  if (modes.includes('first_last_frame_video')) return 'first_last_frame_video' as const
+  if (modes.includes('multi_reference_video')) return 'multi_reference_video' as const
+  return 'image_to_video' as const
+}
+
+// 多图模板可以复用提示词与参数，但不强制切换当前生成通道。
+// 默认仍是首尾帧；只有用户主动选择多参考图时才使用多参考图。
+const isFlexibleReferenceTemplate = (template: VideoGenerationTemplate) =>
+  (template.applicable_modes || []).includes('multi_reference_video')
+
+const templateSupportsMode = (template: VideoGenerationTemplate, mode: string) => {
+  const modes = template.applicable_modes || []
+  if (isFlexibleReferenceTemplate(template)) return true
+  if (modes.includes(mode)) return true
+  // 旧的单图模板仍允许在 Seedance 2.0 中扩展为多参考图。
+  return mode === 'multi_reference_video' && modes.includes('image_to_video')
+}
+
+const templateReferenceCount = (template: VideoGenerationTemplate) => {
+  if (template.reference_frame_count && template.reference_frame_count > 0) return Math.min(9, template.reference_frame_count)
+  const modes = template.applicable_modes || []
+  if (modes.includes('multi_reference_video')) return 3
+  if (modes.includes('first_last_frame_video')) return 2
+  return 1
+}
+
+const templatePrompt = (template: VideoGenerationTemplate) => {
+  const recipePrompt = template.prompt_recipe?.prompt
+  return typeof recipePrompt === 'string' && recipePrompt.trim()
+    ? recipePrompt
+    : template.default_positive_prompt || ''
+}
+
+const isConstructionRecipe = (recipe: Record<string, any> | null) => Boolean(
+  recipe && (
+    Number(recipe.recipe_version || 0) >= 2
+    || recipe.construction_mode === 'construction_evolution'
+    || recipe.project_facts
+    || recipe.construction_unit
+  ),
+)
+
+/**
+ * 视觉模型偶尔会把结构化结果放进 prompt 字段，或在 JSON 外包一层 Markdown/说明文字。
+ * 快速生成页只展示可直接投喂的 prompt；其余字段留给施工工作台的分栏编辑器。
+ */
+const parsePromptMasterPayload = (data: Record<string, any> | null | undefined) => {
+  const source = data || {}
+  const directPrompt = typeof source.prompt === 'string' ? source.prompt.trim() : ''
+  let structured: Record<string, any> | null = null
+  const candidates = [directPrompt, typeof source.raw_prompt === 'string' ? source.raw_prompt.trim() : '']
+  for (const candidate of candidates) {
+    if (!candidate || !(/[{}]/.test(candidate))) continue
+    const clean = candidate
+      .replace(/^\s*```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim()
+    const start = clean.indexOf('{')
+    const end = clean.lastIndexOf('}')
+    if (start < 0 || end <= start) continue
+    try {
+      const parsed = JSON.parse(clean.slice(start, end + 1))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        structured = parsed
+        break
+      }
+    } catch {
+      // 模型返回普通文本时继续使用原始 prompt。
+    }
+  }
+  const recipe = source.recipe && typeof source.recipe === 'object'
+    ? source.recipe
+    : structured?.recipe && typeof structured.recipe === 'object'
+      ? structured.recipe
+      : null
+  const prompt = String(structured?.prompt || directPrompt || '').trim()
+  const negativePrompt = String(source.negative_prompt || structured?.negative_prompt || '').trim()
+  return {
+    prompt,
+    negativePrompt,
+    recipe,
+    name: String(source.name || structured?.name || '').trim(),
+    description: String(source.description || structured?.description || '').trim(),
+  }
+}
+
+const recipeDuration = (value: any, fallback = 5) => {
+  const numbers = String(value ?? '').match(/\d+(?:\.\d+)?/g)?.map(Number) || []
+  if (!numbers.length) return fallback
+  const selected = numbers.length > 1 ? (numbers[0] + numbers[1]) / 2 : numbers[0]
+  return Math.max(2, Math.min(15, Math.round(selected)))
+}
+
+const expandRecipePrompt = (prompt: string, recipe: Record<string, any> | null) => {
+  if (!recipe) return prompt.trim()
+  const parts = [prompt.trim()]
+  const camera = recipe.camera
+  if (camera && typeof camera === 'object') {
+    const fields = [
+      camera.type ? `类型：${camera.type}` : '',
+      camera.direction ? `方向：${camera.direction}` : '',
+      camera.path ? `路径：${camera.path}` : '',
+      camera.speed ? `速度：${camera.speed}` : '',
+      camera.intensity ? `强度：${camera.intensity}` : '',
+    ].filter(Boolean)
+    if (fields.length) parts.push(`运镜设定：${fields.join('；')}`)
+  } else if (camera) {
+    parts.push(`运镜设定：${String(camera)}`)
+  }
+  if (Array.isArray(recipe.timeline) && recipe.timeline.length) {
+    const timeline = recipe.timeline
+      .map((item: any) => `${item.from ?? 0}%-${item.to ?? 100}%：${item.instruction || item.description || ''}`)
+      .filter(Boolean)
+      .join('；')
+    if (timeline) parts.push(`时间轴：${timeline}`)
+  } else if (recipe.timeline) {
+    parts.push(`时间轴：${String(recipe.timeline)}`)
+  }
+  if (Array.isArray(recipe.reference_timing_seconds) && recipe.reference_timing_seconds.length) {
+    const timing = recipe.reference_timing_seconds
+      .map((value: any, index: number) => {
+        const seconds = Number(value)
+        return Number.isFinite(seconds) ? `第${index + 1}张=${seconds.toFixed(3)}s` : ''
+      })
+      .filter(Boolean)
+      .join('；')
+    if (timing) {
+      const duration = Number(recipe.clip_duration_seconds)
+      const durationText = Number.isFinite(duration) ? `，总时长${duration.toFixed(3)}s` : ''
+      parts.push(`参考图时序（从当前镜头起点0秒计算，不使用原视频绝对时间${durationText}）：${timing}`)
+    }
+  }
+  const list = (value: any) => Array.isArray(value) ? value.filter(Boolean).join('；') : value ? String(value) : ''
+  if (list(recipe.preserve)) parts.push(`建筑保持项（必须锁定）：${list(recipe.preserve)}`)
+  if (list(recipe.allow_change)) parts.push(`允许变化项（仅限这些变化）：${list(recipe.allow_change)}`)
+  return parts.filter(Boolean).join('。')
+}
+
+const versionDisplayName = (version: VideoGenerationVersion) =>
+  version.name?.trim() || `AI视频 V${version.version_number}`
+
+const versionDownloadName = (version: VideoGenerationVersion) => {
+  const name = versionDisplayName(version)
+  return /\.[a-z0-9]{2,8}$/i.test(name) ? name : `${name}.mp4`
+}
+
+const formatImageDimensions = (width?: number, height?: number) => (
+  Number.isFinite(width) && Number(width) > 0 && Number.isFinite(height) && Number(height) > 0
+    ? `${width} × ${height}`
+    : ''
+)
 
 // 模板预览资源映射（按模板名称；来自 EVAI img2Video 抓取，2026-08-19）
 const TEMPLATE_PREVIEWS: Record<string, { video: string; first: string; last?: string }> = {
@@ -137,89 +305,168 @@ const modelButtonBase: CSSProperties = {
   transition: 'all 0.2s',
 }
 const modelButtonActive: CSSProperties = {
-  background: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)',
+  background: '#2457A6',
   color: '#fff',
-  borderColor: 'transparent',
-  boxShadow: '0 2px 10px rgba(99, 102, 241, 0.45)',
+  borderColor: '#2457A6',
+  boxShadow: '0 2px 6px rgba(36, 87, 166, 0.16)',
 }
 
 export default function AiVideo() {
   const { projectId = '' } = useParams()
+  const navigate = useNavigate()
+  const location = useLocation()
   const { message } = App.useApp()
+  const [initialDraft] = useState(() => readAiVideoDraft(projectId) || {})
+  // 兼容旧草稿：早期版本可能把提示词大师返回的完整 JSON 保存进了 prompt。
+  const initialPromptPayload = parsePromptMasterPayload({
+    prompt: initialDraft.prompt,
+    negative_prompt: initialDraft.negativePrompt,
+    recipe: initialDraft.recipe,
+  })
 
   const [refImages, setRefImages] = useState<ReferenceImage[]>([])
   const [templates, setTemplates] = useState<VideoGenerationTemplate[]>([])
-  const [shots, setShots] = useState<StoryboardShot[]>([])
-  const [tasks, setTasks] = useState<VideoGenerationJob[]>([])
   const [versions, setVersions] = useState<VideoGenerationVersion[]>([])
 
-  const [generationMode, setGenerationMode] = useState<'image_to_video' | 'first_last_frame_video'>('first_last_frame_video')
-  const [firstFrameId, setFirstFrameId] = useState<string>('')
-  const [lastFrameId, setLastFrameId] = useState<string>('')
+  const [generationMode, setGenerationMode] = useState<'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'>(initialDraft.generationMode || 'first_last_frame_video')
+  const [firstFrameId, setFirstFrameId] = useState<string>(initialDraft.firstFrameId || '')
+  const [lastFrameId, setLastFrameId] = useState<string>(initialDraft.lastFrameId || '')
+  const [referenceAssetIds, setReferenceAssetIds] = useState<string[]>(initialDraft.referenceAssetIds || [])
 
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('')
-  const [prompt, setPrompt] = useState('')
-  const [negativePrompt, setNegativePrompt] = useState('')
-  const [constraintsEnabled, setConstraintsEnabled] = useState(true)
-  const [seedLock, setSeedLock] = useState(false)
-  const [seed, setSeed] = useState<number | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(initialDraft.selectedTemplateId || '')
+  const [prompt, setPrompt] = useState(sanitizePromptResolution(initialPromptPayload.prompt || initialDraft.prompt || ''))
+  const [negativePrompt, setNegativePrompt] = useState(initialPromptPayload.negativePrompt || initialDraft.negativePrompt || '')
+  const [promptRecipe, setPromptRecipe] = useState<Record<string, any> | null>(initialPromptPayload.recipe || initialDraft.recipe || null)
+  const [advancedEnabled, setAdvancedEnabled] = useState(initialDraft.advancedEnabled === true)
+  const [compiledPromptPreview, setCompiledPromptPreview] = useState('')
+  const [constraintsEnabled, setConstraintsEnabled] = useState(initialDraft.constraintsEnabled ?? true)
+  const [seedLock, setSeedLock] = useState(initialDraft.seedLock ?? false)
+  const [seed, setSeed] = useState<number | null>(initialDraft.seed ?? null)
 
-  const [duration, setDuration] = useState(5)
-  const [aspectRatio, setAspectRatio] = useState('adaptive')
-  const [resolution, setResolution] = useState('720p')
-  const [generateAudio, setGenerateAudio] = useState(false)
-  const [modelName, setModelName] = useState('')
+  const [duration, setDuration] = useState(initialDraft.duration || 5)
+  const [aspectRatio, setAspectRatio] = useState(initialDraft.aspectRatio || 'adaptive')
+  const [resolution, setResolution] = useState(normalizeResolution(initialDraft.resolution))
+  const [generateAudio, setGenerateAudio] = useState(initialDraft.generateAudio ?? false)
+  const [modelName, setModelName] = useState(initialDraft.modelName || '')
   const [providers, setProviders] = useState<any[]>([])
-  const [selectedProvider, setSelectedProvider] = useState('')
+  const [selectedProvider, setSelectedProvider] = useState('seedance')
   const [providerCaps, setProviderCaps] = useState<Record<string, boolean>>({})
 
   const [submitting, setSubmitting] = useState(false)
   const [masterLoading, setMasterLoading] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [activeJob, setActiveJob] = useState<VideoGenerationJob | null>(null)
 
   const [activeTab, setActiveTab] = useState('exterior')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [templateScopeFilter, setTemplateScopeFilter] = useState<'all' | 'personal' | 'organization'>('all')
+  const [templateToApply, setTemplateToApply] = useState<VideoGenerationTemplate | null>(null)
+  const [templateApplyOpen, setTemplateApplyOpen] = useState(false)
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null)
+  const [applyFirstFrameId, setApplyFirstFrameId] = useState('')
+  const [applyLastFrameId, setApplyLastFrameId] = useState('')
+  const [applyReferenceIds, setApplyReferenceIds] = useState<string[]>([])
+  const [applySubject, setApplySubject] = useState('')
+  const [applyScene, setApplyScene] = useState('')
 
-  const [bindOpen, setBindOpen] = useState(false)
-  const [bindVersion, setBindVersion] = useState<VideoGenerationVersion | null>(null)
-  const [bindShotId, setBindShotId] = useState<string>('')
+  const [renameVersionTarget, setRenameVersionTarget] = useState<VideoGenerationVersion | null>(null)
+  const [renameVersionValue, setRenameVersionValue] = useState('')
+  const [renamingVersion, setRenamingVersion] = useState(false)
+
+  // V2 施工配方只在工作台确认应用后生效；普通快速生成不继承历史高级草稿。
+  const activePromptRecipe = isConstructionRecipe(promptRecipe) && !advancedEnabled
+    ? null
+    : promptRecipe
+
+  useEffect(() => {
+    const incoming = (location.state || {}) as Record<string, any>
+    if (incoming.submittedJob?.id) {
+      setActiveJob(incoming.submittedJob)
+      setActiveJobId(incoming.submittedJob.id)
+    }
+    // 回到快速生成页时，先应用工作台的开关状态；即使没有携带配方，也不能
+    // 让上一次已经应用的高级状态残留在本次普通快速生成里。
+    if (typeof incoming.advancedEnabled === 'boolean') setAdvancedEnabled(incoming.advancedEnabled)
+    if (!incoming.recipe && typeof incoming.prompt !== 'string') return
+    const incomingPromptPayload = parsePromptMasterPayload({
+      prompt: incoming.prompt,
+      negative_prompt: incoming.negativePrompt,
+      recipe: incoming.recipe,
+    })
+    if (incomingPromptPayload.recipe) setPromptRecipe(incomingPromptPayload.recipe)
+    if (typeof incoming.prompt === 'string') setPrompt(sanitizePromptResolution(incomingPromptPayload.prompt))
+    if (typeof incoming.negativePrompt === 'string' || incomingPromptPayload.negativePrompt) {
+      setNegativePrompt(incomingPromptPayload.negativePrompt)
+    }
+    setSelectedProvider('seedance')
+    if (typeof incoming.modelName === 'string') setModelName(incoming.modelName)
+    if (typeof incoming.duration === 'number') setDuration(incoming.duration)
+    if (typeof incoming.firstFrameId === 'string') setFirstFrameId(incoming.firstFrameId)
+    if (typeof incoming.lastFrameId === 'string') setLastFrameId(incoming.lastFrameId)
+    if (Array.isArray(incoming.referenceAssetIds)) setReferenceAssetIds(incoming.referenceAssetIds)
+    if (typeof incoming.selectedTemplateId === 'string') setSelectedTemplateId(incoming.selectedTemplateId)
+    if (['image_to_video', 'first_last_frame_video', 'multi_reference_video'].includes(incoming.generationMode)) setGenerationMode(incoming.generationMode)
+    if (typeof incoming.aspectRatio === 'string') setAspectRatio(incoming.aspectRatio)
+    if (typeof incoming.resolution === 'string') setResolution(normalizeResolution(incoming.resolution, resolution))
+    if (typeof incoming.generateAudio === 'boolean') setGenerateAudio(incoming.generateAudio)
+    if (typeof incoming.constraintsEnabled === 'boolean') setConstraintsEnabled(incoming.constraintsEnabled)
+    if (typeof incoming.seedLock === 'boolean') setSeedLock(incoming.seedLock)
+    if (typeof incoming.seed === 'number' || incoming.seed === null) setSeed(incoming.seed)
+  }, [location.state])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => saveAiVideoDraft(projectId, {
+      recipe: promptRecipe,
+      advancedEnabled,
+      prompt,
+      negativePrompt,
+      selectedProvider: 'seedance',
+      modelName,
+      duration,
+      firstFrameId,
+      lastFrameId,
+      referenceAssetIds,
+      selectedTemplateId,
+      generationMode,
+      aspectRatio,
+      resolution,
+      generateAudio,
+      constraintsEnabled,
+      seedLock,
+      seed,
+    }), 220)
+    return () => window.clearTimeout(timer)
+  }, [projectId, promptRecipe, advancedEnabled, prompt, negativePrompt, modelName, duration, firstFrameId, lastFrameId, referenceAssetIds, selectedTemplateId, generationMode, aspectRatio, resolution, generateAudio, constraintsEnabled, seedLock, seed])
 
   const fetchAll = () => {
     Promise.all([
       videoGenApi.templates(projectId),
       videoGenApi.referenceImages(projectId),
-      videoGenApi.listTasks(projectId),
       videoGenApi.versions(projectId),
-      storyboardApi.list(projectId),
     ])
-      .then(([t, r, j, v, s]) => {
+      .then(([t, r, v]) => {
         setTemplates(t.data)
         setRefImages(r.data)
-        setTasks(j.data)
         setVersions(v.data)
-        setShots(s.data)
       })
       .catch(() => {})
   }
 
   useEffect(() => {
     fetchAll()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
-  // Provider 信息与能力（即梦 Seedance / MiniMax 可切换）
+  // 当前新任务只开放 Seedance，避免高级配方在不同视频模型间产生语义漂移。
   useEffect(() => {
     videoGenApi
       .providers(projectId)
       .then((res) => {
-        const list = res.data || []
+        const seedance = (res.data || []).find((p: any) => p.provider === 'seedance')
+        const list = seedance ? [seedance] : []
         setProviders(list)
-        const def =
-          list.find((p: any) => p.is_active && p.available) ||
-          list.find((p: any) => p.available) ||
-          list[0]
+        const def = seedance
         if (def) {
-          setSelectedProvider(def.provider)
+          setSelectedProvider('seedance')
           setProviderCaps(def.capabilities || {})
           setModelName(def.default_model || (def.models || [])[0] || '')
         }
@@ -241,6 +488,11 @@ export default function AiVideo() {
       setGenerationMode('image_to_video')
       message.info(`${PROVIDER_LABELS[p.provider] || p.provider} 不支持首尾帧模式，已切换为图生视频`)
     }
+    if (p && p.capabilities?.multi_reference_video !== true && generationMode === 'multi_reference_video') {
+      setGenerationMode('image_to_video')
+      setReferenceAssetIds([])
+      message.info(`${PROVIDER_LABELS[p.provider] || p.provider} 不支持多参考图模式，已切换为单图生视频`)
+    }
     if (p && p.capabilities?.generate_audio !== true) {
       setGenerateAudio(false)
     }
@@ -255,10 +507,16 @@ export default function AiVideo() {
       try {
         const response = await videoGenApi.getTask(projectId, activeJobId)
         if (stopped) return
+        setActiveJob(response.data)
         if (['success', 'failed', 'cancelled'].includes(response.data.status)) {
           clearInterval(timer)
           setActiveJobId(null)
           setSubmitting(false)
+          if (response.data.status === 'success') {
+            message.success(response.data.asset_status === 'ready' ? '视频生成完成，已写入素材库' : '视频生成完成')
+          } else if (response.data.status === 'failed') {
+            message.error(response.data.error_message || '视频生成失败，可点击重试')
+          }
           fetchAll()
         }
       } catch {
@@ -271,34 +529,64 @@ export default function AiVideo() {
       stopped = true
       clearInterval(timer)
     }
-  }, [activeJobId, projectId])
+  }, [activeJobId, projectId, message])
 
   const firstFrame = useMemo(() => refImages.find((i) => i.id === firstFrameId) || null, [refImages, firstFrameId])
   const lastFrame = useMemo(() => refImages.find((i) => i.id === lastFrameId) || null, [refImages, lastFrameId])
 
   const canFirstLast = providerCaps.first_last_frame_video === true
+  const canMultiReference = providerCaps.multi_reference_video === true
   const canImageToVideo = providerCaps.image_to_video !== false
 
-  // 右侧分类：建筑外景运镜（单图图生）/ 首尾帧·创意运镜
+  // 右侧分类：建筑外景运镜（单图图生）/ 首尾帧与多参考图·创意运镜
   const displayTemplates = useMemo(() => {
-    if (activeTab === 'creative') {
-      return templates.filter((t) => (t.applicable_modes || []).includes('first_last_frame_video'))
+    const scoped = templates.filter((t) => {
+      if (templateScopeFilter === 'personal') return t.scope === 'personal'
+      if (templateScopeFilter === 'organization') return t.is_system || t.scope === 'organization'
+      return true
+    })
+    if (generationMode === 'multi_reference_video') {
+      return scoped.filter((t) => templateSupportsMode(t, generationMode))
     }
-    return templates.filter((t) => (t.applicable_modes || []).includes('image_to_video'))
-  }, [templates, activeTab])
-
-  const runningCount = useMemo(
-    () => tasks.filter((t) => ['queued', 'running', 'retry'].includes(t.status)).length,
-    [tasks],
-  )
+    if (activeTab === 'creative') {
+      return scoped.filter((t) => templateSupportsMode(t, 'first_last_frame_video'))
+    }
+    return scoped.filter((t) => templateSupportsMode(t, 'image_to_video'))
+  }, [templates, activeTab, generationMode, templateScopeFilter])
 
   // 最终提交提示词预览（与后端 build_final_prompt 保持一致）
   const finalPromptPreview = useMemo(() => {
     const constraints = constraintsEnabled ? (templates.find((t) => t.id === selectedTemplateId)?.default_arch_constraints || []) : []
-    const parts = [prompt.trim()]
+    const parts = [sanitizePromptResolution(expandRecipePrompt(prompt, activePromptRecipe))]
     if (constraints.length) parts.push(constraints.join('；'))
     return parts.filter(Boolean).join('。')
-  }, [prompt, constraintsEnabled, selectedTemplateId, templates])
+  }, [prompt, activePromptRecipe, constraintsEnabled, selectedTemplateId, templates])
+
+  useEffect(() => {
+    if (!projectId || (!prompt.trim() && !activePromptRecipe)) {
+      setCompiledPromptPreview('')
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      videoGenApi.compilePrompt(projectId, {
+        positive_prompt: prompt,
+        negative_prompt: negativePrompt || null,
+        prompt_recipe: activePromptRecipe,
+        template_id: selectedTemplateId || null,
+        constraints_enabled: constraintsEnabled,
+        resolution,
+      }).then((response) => {
+        if (!cancelled) setCompiledPromptPreview(response.data.provider_prompt || response.data.positive_prompt || '')
+      }).catch(() => {
+        if (!cancelled) setCompiledPromptPreview('')
+      })
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [projectId, prompt, negativePrompt, activePromptRecipe, selectedTemplateId, constraintsEnabled, resolution])
 
   const handleUploadFrame = async (file: File) => {
     try {
@@ -311,23 +599,119 @@ export default function AiVideo() {
   }
 
   const handleSelectTemplate = (t: VideoGenerationTemplate) => {
+    const tMode = templateMode(t)
+    const flexibleTemplate = isFlexibleReferenceTemplate(t)
+    const modeToCheck = flexibleTemplate ? generationMode : tMode
+    if (modeToCheck === 'first_last_frame_video' && !canFirstLast) {
+      message.warning('当前 Provider 不支持首尾帧，请先切换到支持首尾帧的模型')
+      return
+    }
+    if (modeToCheck === 'multi_reference_video' && !canMultiReference) {
+      message.warning('当前 Provider 不支持多参考图，请先切换到支持多参考图的模型')
+      return
+    }
     setSelectedTemplateId(t.id)
-    setPrompt(t.default_positive_prompt || '')
-    setNegativePrompt(t.default_negative_prompt || '')
-    setDuration(t.recommended_duration)
-    setAspectRatio(t.recommended_aspect_ratio)
-    setResolution(t.recommended_resolution)
+    setAdvancedEnabled(false)
+    const recipe = t.prompt_recipe || {}
+    const recommended = recipe.recommended && typeof recipe.recommended === 'object' ? recipe.recommended : {}
+    setPromptRecipe(recipe)
+    setPrompt(templatePrompt(t).slice(0, 500))
+    setNegativePrompt(String(recipe.negative_prompt || t.default_negative_prompt || ''))
+    setDuration(recipeDuration(recommended.duration, t.recommended_duration || 5))
+    setAspectRatio(String(recommended.aspect_ratio || t.recommended_aspect_ratio || 'adaptive'))
+    setResolution(normalizeResolution(recommended.resolution || t.recommended_resolution, resolution))
     setConstraintsEnabled(true)
-    // 模板模式与左侧生成模式保持同步
-    const tMode = (t.applicable_modes || []).includes('first_last_frame_video')
-      ? 'first_last_frame_video'
-      : 'image_to_video'
-    if (tMode !== generationMode) {
+    if (!flexibleTemplate && tMode !== generationMode) {
       if (tMode === 'first_last_frame_video' && canFirstLast) {
         setGenerationMode('first_last_frame_video')
+      } else if (tMode === 'multi_reference_video' && canMultiReference) {
+        setGenerationMode('multi_reference_video')
       } else {
         setGenerationMode('image_to_video')
       }
+    }
+  }
+
+  const openTemplateApply = (template: VideoGenerationTemplate) => {
+    setTemplateToApply(template)
+    setApplyFirstFrameId(firstFrameId)
+    setApplyLastFrameId(lastFrameId)
+    const originalReferences = (template.reference_frame_asset_ids || []).filter((id) =>
+      refImages.some((image) => image.id === id),
+    )
+    setApplyReferenceIds(
+      originalReferences.length === templateReferenceCount(template)
+        ? originalReferences
+        : referenceAssetIds,
+    )
+    setApplySubject('')
+    setApplyScene('')
+    setTemplateApplyOpen(true)
+  }
+
+  const confirmTemplateApply = () => {
+    if (!templateToApply) return
+    const flexibleTemplate = isFlexibleReferenceTemplate(templateToApply)
+    const mode = flexibleTemplate ? generationMode : templateMode(templateToApply)
+    if (mode === 'first_last_frame_video' && !canFirstLast) {
+      message.warning('当前 Provider 不支持首尾帧，请先切换到支持首尾帧的模型')
+      return
+    }
+    if (mode === 'multi_reference_video' && !canMultiReference) {
+      message.warning('当前 Provider 不支持多参考图，请先切换到支持多参考图的模型')
+      return
+    }
+    if (!applyFirstFrameId) {
+      message.warning('请先选择新的建筑首帧')
+      return
+    }
+    if (mode === 'first_last_frame_video' && !applyLastFrameId) {
+      message.warning('这个模板需要同时选择新的建筑首帧和尾帧')
+      return
+    }
+    const requiredReferenceCount = templateReferenceCount(templateToApply)
+    if (mode === 'multi_reference_video' && applyReferenceIds.length !== requiredReferenceCount) {
+      message.warning(`这个模板需要按顺序选择 ${requiredReferenceCount} 张图片`)
+      return
+    }
+    handleSelectTemplate(templateToApply)
+    setGenerationMode(mode)
+    setFirstFrameId(mode === 'multi_reference_video' ? applyReferenceIds[0] : applyFirstFrameId)
+    setLastFrameId(mode === 'first_last_frame_video' ? applyLastFrameId : '')
+    setReferenceAssetIds(mode === 'multi_reference_video' ? applyReferenceIds : [])
+    const replacements = [
+      applySubject.trim() ? `当前建筑主体：${applySubject.trim()}` : '',
+      applyScene.trim() ? `场景与环境：${applyScene.trim()}` : '',
+    ].filter(Boolean)
+    const basePrompt = templatePrompt(templateToApply)
+    setPrompt([basePrompt, ...replacements].filter(Boolean).join('。').slice(0, 500))
+    setTemplateApplyOpen(false)
+    message.success('模板已套用，图片和生成参数已带入')
+  }
+
+  const templateApplyMode = templateToApply
+    ? (isFlexibleReferenceTemplate(templateToApply) ? generationMode : templateMode(templateToApply))
+    : null
+  const originalTemplateReferenceIds = (templateToApply?.reference_frame_asset_ids || []).filter((id) =>
+    refImages.some((image) => image.id === id),
+  )
+  const usingOriginalTemplateFrames = Boolean(
+    templateToApply
+    && originalTemplateReferenceIds.length === templateReferenceCount(templateToApply)
+    && applyReferenceIds.length === originalTemplateReferenceIds.length
+    && applyReferenceIds.every((id, index) => id === originalTemplateReferenceIds[index]),
+  )
+
+  const handleRetryJob = async () => {
+    if (!activeJob) return
+    setSubmitting(true)
+    try {
+      const response = await videoGenApi.retryTask(projectId, activeJob.id)
+      setActiveJob(response.data)
+      setActiveJobId(response.data.id)
+      message.info('已重新提交生成任务')
+    } catch {
+      setSubmitting(false)
     }
   }
 
@@ -335,8 +719,9 @@ export default function AiVideo() {
   const handlePromptMaster = async () => {
     const firstOk = !!firstFrameId
     const lastOk = generationMode === 'first_last_frame_video' ? !!lastFrameId : true
-    if (!firstOk || !lastOk) {
-      message.warning(generationMode === 'first_last_frame_video' ? '请先选择首帧与尾帧图片' : '请先选择一张参考帧图片')
+    const refsOk = generationMode === 'multi_reference_video' ? referenceAssetIds.length >= 2 : true
+    if (!firstOk || !lastOk || !refsOk) {
+      message.warning(generationMode === 'multi_reference_video' ? '请按顺序选择至少两张参考图' : generationMode === 'first_last_frame_video' ? '请先选择首帧与尾帧图片' : '请先选择一张参考帧图片')
       return
     }
     setMasterLoading(true)
@@ -344,13 +729,27 @@ export default function AiVideo() {
       const res = await videoGenApi.promptMaster(projectId, {
         first_frame_asset_id: firstFrameId,
         last_frame_asset_id: generationMode === 'first_last_frame_video' ? lastFrameId : undefined,
+        reference_asset_ids: generationMode === 'multi_reference_video' ? referenceAssetIds : undefined,
         template_id: selectedTemplateId || undefined,
         intent: prompt.trim() || undefined,
         generation_mode: generationMode,
       })
-      setPrompt(res.data.prompt)
-      if (res.data.negative_prompt) setNegativePrompt(res.data.negative_prompt)
-      message.success(res.data.is_mock ? '提示词已生成（演示模式）' : '提示词大师已生成')
+      const parsed = parsePromptMasterPayload(res.data as Record<string, any>)
+      // 高级参数是输出规格的唯一来源，提示词大师返回的“4K/超高清”等
+      // 描述不能覆盖当前页面选择的 720p/1080p。
+      setPrompt(sanitizePromptResolution(parsed.prompt).slice(0, 500))
+      if (parsed.negativePrompt) setNegativePrompt(parsed.negativePrompt)
+      setPromptRecipe(parsed.recipe)
+      setAdvancedEnabled(false)
+      message.success(
+        parsed.name
+          ? `已生成「${parsed.name}」，镜头提示词和结构化配方已分别归位`
+          : res.data.is_mock
+          ? '提示词已生成（演示模式）'
+          : res.data.vision_used
+            ? `提示词已由${res.data.provider === 'kimi' ? 'Kimi 多模态模型' : res.data.provider === 'volcengine_vision' ? '火山方舟视觉模型' : '视觉模型'}生成`
+            : '提示词大师已生成',
+      )
     } catch {
       // 拦截器已提示
     } finally {
@@ -358,7 +757,7 @@ export default function AiVideo() {
     }
   }
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (structureConflictConfirmed = false) => {
     if (!firstFrameId) {
       message.warning('请先在左侧明确选择一张首帧图片，再发起视频生成')
       return
@@ -367,34 +766,59 @@ export default function AiVideo() {
       message.warning('首尾帧模式必须明确选择两张图片：第一张为首帧，第二张为尾帧')
       return
     }
-    if (!prompt.trim()) {
+    if (generationMode === 'multi_reference_video' && referenceAssetIds.length < 2) {
+      message.warning('多参考图模式需要按顺序选择至少两张图片')
+      return
+    }
+    if (!prompt.trim() && !activePromptRecipe) {
       message.warning('请填写视频提示词')
       return
     }
 
-    // 建筑约束冲突预检
-    try {
-      const check = await videoGenApi.constraintCheck(projectId, prompt)
-      if (check.data.blocked) {
-        message.error('检测到可能改变工程结构的请求：' + check.data.conflicts.join('、') + '。禁止增加楼层、改变建筑轮廓、移动道路或替换主楼。')
-        return
+    // 建筑约束冲突预检。检测到施工工序类关键词时，先让用户明确确认，
+    // 不要求用户为了通过规则而反复改写专业描述。
+    if (!structureConflictConfirmed) {
+      try {
+        const check = await videoGenApi.constraintCheck(projectId, prompt, activePromptRecipe)
+        if (check.data.blocked) {
+          Modal.confirm({
+            title: '检测到可能改变工程结构的描述',
+            icon: <SafetyOutlined />,
+            content: (
+              <div>
+                <p style={{ marginBottom: 8 }}>
+                  系统识别到：{check.data.conflicts.join('、')}。
+                </p>
+                <p style={{ marginBottom: 0, color: '#667085' }}>
+                  如果这里描述的是临时支撑、模板或施工工序，而不是修改整栋建筑，可以确认继续。本次确认只对当前生成任务生效。
+                </p>
+              </div>
+            ),
+            okText: '确认继续生成',
+            cancelText: '返回修改',
+            okButtonProps: { danger: true },
+            onOk: () => handleSubmit(true),
+          })
+          return
+        }
+      } catch {
+        // 后端也会拦截
       }
-    } catch {
-      // 后端也会拦截
     }
 
     setSubmitting(true)
-    setDrawerOpen(true)
     try {
+      const effectivePrompt = sanitizePromptResolution(prompt)
       const res = await videoGenApi.createTask(projectId, {
-        storyboard_shot_id: undefined,
         generation_mode: generationMode,
         first_frame_asset_id: firstFrameId,
         last_frame_asset_id: generationMode === 'first_last_frame_video' ? lastFrameId : undefined,
+        reference_asset_ids: generationMode === 'multi_reference_video' ? referenceAssetIds : [],
         template_id: selectedTemplateId || null,
-        provider: selectedProvider || undefined,
+        prompt_recipe: activePromptRecipe || undefined,
+        provider: 'seedance',
         model_name: modelName || undefined,
-        positive_prompt: prompt,
+        positive_prompt: effectivePrompt,
         negative_prompt: negativePrompt || null,
         duration,
         aspect_ratio: aspectRatio,
@@ -402,8 +826,10 @@ export default function AiVideo() {
         seed: seedLock ? seed : null,
         generate_audio: generateAudio,
         constraints_enabled: constraintsEnabled,
+        structure_conflict_confirmed: structureConflictConfirmed,
         idempotency_key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       })
+      setActiveJob(res.data)
       setActiveJobId(res.data.id)
       message.success('视频生成任务已提交')
       setTimeout(fetchAll, 1500)
@@ -413,31 +839,56 @@ export default function AiVideo() {
     }
   }
 
+  const openAdvancedWorkbench = () => {
+    const advancedState = {
+      advancedWorkbench: true,
+      recipe: promptRecipe,
+      advancedEnabled: false,
+      prompt,
+      negativePrompt,
+      selectedProvider,
+      modelName,
+      duration,
+      firstFrameId,
+      lastFrameId,
+      referenceAssetIds,
+      selectedTemplateId,
+      generationMode,
+      aspectRatio,
+      resolution,
+      generateAudio,
+      constraintsEnabled,
+      seedLock,
+      seed,
+    }
+    // 用户可能刚选完首尾帧就进入高级页；立即保存，不能依赖防抖定时器。
+    saveAiVideoDraft(projectId, {
+      recipe: promptRecipe,
+      advancedEnabled: false,
+      prompt,
+      negativePrompt,
+      selectedProvider: 'seedance',
+      modelName,
+      duration,
+      firstFrameId,
+      lastFrameId,
+      referenceAssetIds,
+      selectedTemplateId,
+      generationMode,
+      aspectRatio,
+      resolution,
+      generateAudio,
+      constraintsEnabled,
+      seedLock,
+      seed,
+    })
+    navigate(`/project/${projectId}/ai-video/advanced`, { state: advancedState })
+  }
+
   const handleSelectVersion = async (v: VideoGenerationVersion) => {
     try {
       await videoGenApi.selectVersion(projectId, v.id)
       message.success('已设为当前结果')
-      fetchAll()
-    } catch {
-      // 拦截器已提示
-    }
-  }
-
-  const handleBindShot = (v: VideoGenerationVersion) => {
-    setBindVersion(v)
-    setBindShotId('')
-    setBindOpen(true)
-  }
-
-  const confirmBind = async () => {
-    if (!bindVersion || !bindShotId) {
-      message.warning('请选择要绑定的分镜')
-      return
-    }
-    try {
-      await videoGenApi.bindVersion(projectId, bindVersion.id, bindShotId)
-      message.success('已绑定到分镜')
-      setBindOpen(false)
       fetchAll()
     } catch {
       // 拦截器已提示
@@ -454,42 +905,57 @@ export default function AiVideo() {
     }
   }
 
-  const handleCancelJob = async (job: VideoGenerationJob) => {
+  const handleDeleteTemplate = async (template: VideoGenerationTemplate) => {
+    if (template.is_system || deletingTemplateId) return
+    setDeletingTemplateId(template.id)
     try {
-      await videoGenApi.cancelTask(projectId, job.id)
-      message.success('已取消任务')
+      await videoGenApi.deleteTemplate(projectId, template.id)
+      if (selectedTemplateId === template.id) {
+        setSelectedTemplateId('')
+        setPromptRecipe(null)
+      }
+      if (templateToApply?.id === template.id) {
+        setTemplateToApply(null)
+        setTemplateApplyOpen(false)
+      }
+      message.success('模板已删除')
       fetchAll()
     } catch {
       // 拦截器已提示
+    } finally {
+      setDeletingTemplateId(null)
     }
   }
 
-  const handleRetryJob = async (job: VideoGenerationJob) => {
+  const openRenameVersion = (v: VideoGenerationVersion) => {
+    setRenameVersionTarget(v)
+    setRenameVersionValue(versionDisplayName(v))
+  }
+
+  const handleRenameVersion = async () => {
+    if (!renameVersionTarget) return
+    const name = renameVersionValue.trim()
+    if (!name) {
+      message.warning('请输入视频版本名称')
+      return
+    }
+    setRenamingVersion(true)
     try {
-      const res = await videoGenApi.retryTask(projectId, job.id)
-      setActiveJobId(res.data.id)
-      setSubmitting(true)
+      await videoGenApi.renameVersion(projectId, renameVersionTarget.id, name)
+      message.success('视频版本已重命名')
+      setRenameVersionTarget(null)
       fetchAll()
     } catch {
       // 拦截器已提示
+    } finally {
+      setRenamingVersion(false)
     }
   }
 
   return (
-    <div style={{ height: 'calc(100vh - 128px)', display: 'flex', gap: 16 }}>
+    <div className="ai-video-page">
       {/* ============ 左侧：生成控制面板 ============ */}
-      <div
-        style={{
-          width: 360,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          background: '#fff',
-          borderRadius: 12,
-          border: '1px solid #f0f0f0',
-          overflow: 'hidden',
-        }}
-      >
+      <div className="ai-video-controls">
         <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {/* 1. 功能标签 */}
           <Text strong style={{ fontSize: 14 }}>生成功能</Text>
@@ -497,19 +963,23 @@ export default function AiVideo() {
             block
             style={{ marginTop: 8 }}
             value={generationMode}
-            onChange={(v) => setGenerationMode(String(v) as 'image_to_video' | 'first_last_frame_video')}
+            onChange={(v) => {
+              const next = String(v) as 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
+              setGenerationMode(next)
+              if (next === 'multi_reference_video' && firstFrameId && !referenceAssetIds.includes(firstFrameId)) {
+                setReferenceAssetIds([firstFrameId])
+              }
+            }}
             options={[
               { label: '首尾帧视频', value: 'first_last_frame_video', disabled: !canFirstLast },
-              { label: '多图视频', value: 'image_to_video', disabled: !canImageToVideo },
+              { label: '单图生视频', value: 'image_to_video', disabled: !canImageToVideo },
+              { label: '多参考图（Seedance 2.0）', value: 'multi_reference_video', disabled: !canMultiReference },
             ]}
           />
           {generationMode === 'first_last_frame_video' && !canFirstLast && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginTop: 8 }}
-              message="当前模型不支持首尾帧，且不允许降级为普通图生视频"
-            />
+            <Text type="warning" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+              当前模型不支持首尾帧，且不允许降级为普通图生视频
+            </Text>
           )}
 
           {/* 2. 图片槽位 */}
@@ -523,6 +993,32 @@ export default function AiVideo() {
                   <ArrowRightOutlined />
                 </div>
                 <FrameSlot label="尾帧" frame={lastFrame} images={refImages} onSelect={setLastFrameId} onClear={() => setLastFrameId('')} onUpload={handleUploadFrame} />
+              </div>
+            ) : generationMode === 'multi_reference_video' ? (
+              <div>
+                <Select
+                  mode="multiple"
+                  maxCount={9}
+                  value={referenceAssetIds}
+                  onChange={(ids) => {
+                    setReferenceAssetIds(ids)
+                    setFirstFrameId(ids[0] || '')
+                  }}
+                  placeholder="按镜头参考顺序选择 2~9 张图片"
+                  style={{ width: '100%' }}
+                  options={refImages.map((img) => ({ label: img.name, value: img.id }))}
+                  optionRender={(option) => {
+                    const image = refImages.find((item) => item.id === option.value)
+                    return <Space><img src={image?.url} alt="" style={{ width: 32, height: 24, objectFit: 'cover', borderRadius: 3 }} /><span>{option.label}</span></Space>
+                  }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 10 }}>
+                  {referenceAssetIds.map((id, index) => {
+                    const image = refImages.find((item) => item.id === id)
+                    return image ? <div key={id} style={{ minWidth: 0 }}><div style={{ position: 'relative', height: 82, borderRadius: 7, overflow: 'hidden', background: '#eef2f7' }}><img src={image.url} alt={image.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /><Tag color={index === 0 ? 'blue' : 'default'} style={{ position: 'absolute', left: 4, top: 4, margin: 0 }}>{index + 1}</Tag></div><Text ellipsis={{ tooltip: image.name }} style={{ display: 'block', fontSize: 11, marginTop: 3 }}>{image.name}</Text></div> : null
+                  })}
+                </div>
+                <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 11 }}>第一张作为首参考图，其余图片按选中顺序发送给 Seedance。</Text>
               </div>
             ) : (
               <FrameSlot label="参考图（首帧）" frame={firstFrame} images={refImages} onSelect={setFirstFrameId} onClear={() => setFirstFrameId('')} onUpload={handleUploadFrame} />
@@ -549,7 +1045,7 @@ export default function AiVideo() {
                   title={p.available ? undefined : '未配置 Key'}
                 >
                   {PROVIDER_LABELS[p.provider] || p.provider}
-                  {!p.available && '（未配置）'}
+                  {p.is_mock ? '（本地演示）' : !p.available ? '（未配置）' : ''}
                 </button>
               )
             })}
@@ -580,51 +1076,56 @@ export default function AiVideo() {
               lineHeight: 1.9,
             }}
           >
-            <div><Text strong style={{ fontSize: 12, color: '#334155' }}>模型：</Text>{modelName || '—'}</div>
+            <div><Text strong style={{ fontSize: 12, color: '#334155' }}>模型：</Text>{modelName || '无'}</div>
             <div>图生视频：{canImageToVideo ? '支持' : '不支持'}</div>
             <div>首尾帧过渡：{canFirstLast ? '支持' : '不支持'}</div>
+            <div>多参考图：{canMultiReference ? '支持（2~9张）' : '不支持'}</div>
             <div>生成声音：{providerCaps.generate_audio === true ? '支持（可关闭）' : '不支持'}</div>
             <div>视频时长：5 / 8 / 10 / 15 秒</div>
           </div>
 
+          <div style={{ marginTop: 12, padding: 12, border: '1px solid #b9cceb', borderRadius: 8, background: 'linear-gradient(135deg, #f4f8ff 0%, #ffffff 72%)' }}>
+            <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space align="start" size={9}>
+                <SafetyOutlined style={{ marginTop: 3, color: '#2457A6', fontSize: 16 }} />
+                <div>
+                  <Text strong style={{ display: 'block', color: '#183b73', fontSize: 13 }}>高级生成 · 施工提示词工程</Text>
+                  <Text type="secondary" style={{ display: 'block', marginTop: 3, fontSize: 11, lineHeight: 1.45 }}>WBS、施工状态、双时间轴和验收清单集中配置，统一投喂 Seedance。</Text>
+                  <Text type={advancedEnabled ? 'success' : 'secondary'} style={{ display: 'block', marginTop: 4, fontSize: 11, lineHeight: 1.45 }}>
+                    {advancedEnabled
+                      ? '高级配方已应用到本次生成。'
+                      : isConstructionRecipe(promptRecipe)
+                        ? '提示词大师已解析施工配方；请进入工作台查看分栏字段，未应用前不会投喂。'
+                        : '未进入并应用工作台时，快速生成只使用普通镜头提示词。'}
+                  </Text>
+                </div>
+              </Space>
+              <Button
+                type="primary"
+                size="small"
+                onClick={openAdvancedWorkbench}
+              >进入工作台</Button>
+            </Space>
+          </div>
+
           {/* 5. 输入描述 */}
           <Divider style={{ margin: '14px 0' }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text strong style={{ fontSize: 14 }}>输入描述</Text>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <div><Text strong style={{ fontSize: 14 }}>镜头提示词</Text><Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 3 }}>描述镜头运动、建筑状态和画面节奏，最多 500 个字符。</Text></div>
+            <Text type={prompt.length >= 500 ? 'danger' : 'secondary'} style={{ fontSize: 11 }}>{prompt.length} / 500</Text>
           </div>
-          <div style={{ position: 'relative', marginTop: 8 }}>
+          <div style={{ marginTop: 9 }}>
             <Input.TextArea
-              rows={5}
+              rows={6}
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => setPrompt(e.target.value.slice(0, 500))}
               placeholder="描述你想要的镜头与画面，例如：镜头缓慢推进，建筑主体稳定居中，光影自然"
-              style={{ paddingRight: 92 }}
+              style={{ fontSize: 13, resize: 'vertical' }}
               maxLength={500}
             />
-            <div
-              style={{
-                position: 'absolute',
-                top: 8,
-                right: 8,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-end',
-                gap: 4,
-              }}
-            >
-              <Button
-                size="small"
-                type="primary"
-                ghost
-                icon={<ThunderboltOutlined />}
-                loading={masterLoading}
-                onClick={handlePromptMaster}
-              >
-                提示词大师
-              </Button>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                {prompt.length} / 500
-              </Text>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>AI读取多图生成提示词。</Text>
+              <Button type="primary" icon={<ThunderboltOutlined />} loading={masterLoading} onClick={handlePromptMaster}>提示词大师</Button>
             </div>
           </div>
 
@@ -729,8 +1230,8 @@ export default function AiVideo() {
                           style={{
                             marginTop: 4,
                             padding: 8,
-                            background: '#fafafa',
-                            border: '1px solid #f0f0f0',
+                            background: '#F8FAFC',
+                            border: '1px solid #E4E9F0',
                             borderRadius: 6,
                             fontSize: 12,
                             color: '#444',
@@ -738,9 +1239,10 @@ export default function AiVideo() {
                             whiteSpace: 'pre-wrap',
                           }}
                         >
-                          {finalPromptPreview || '（空）'}
+                          {compiledPromptPreview || finalPromptPreview || '（空）'}
                         </div>
                       </div>
+
                     </div>
                   ),
                 },
@@ -749,22 +1251,43 @@ export default function AiVideo() {
           </div>
         </div>
 
+        {activeJob && (
+          <Card size="small" style={{ margin: '12px 16px', borderColor: activeJob.status === 'failed' ? '#ffccc7' : '#d6e4ff' }}>
+            <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
+              <div>
+                <Text strong style={{ fontSize: 13 }}>
+                  {activeJob.status === 'success' ? '生成完成' : activeJob.status === 'failed' ? '生成失败' : '视频生成中'}
+                </Text>
+                <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 3 }}>
+                  {PROVIDER_LABELS[activeJob.provider] || activeJob.provider} · {activeJob.model_name || '默认模型'} · {activeJob.duration}s
+                </Text>
+              </div>
+              {activeJob.status === 'success' && <Tag color="green" icon={<CheckCircleOutlined />}>已入素材库</Tag>}
+              {activeJob.status === 'failed' && <Button size="small" icon={<ReloadOutlined />} onClick={handleRetryJob}>重试</Button>}
+            </Space>
+            {['queued', 'running'].includes(activeJob.status) && <Progress percent={activeJob.progress || 5} status="active" size="small" style={{ marginTop: 8, marginBottom: 0 }} />}
+            {activeJob.status === 'failed' && <Text type="danger" style={{ display: 'block', fontSize: 11, marginTop: 8 }}>{activeJob.error_message || 'Provider 返回失败，请检查配置后重试'}</Text>}
+            {activeJob.status === 'success' && <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 8 }}>结果素材 ID：{activeJob.result_asset_id || '等待素材索引'}</Text>}
+            {activeJob.quality_report?.engineering_review && (
+              <Alert
+                type="warning"
+                showIcon
+                message="工程质检需人工复核"
+                description={activeJob.quality_report.engineering_review.note || '请对照图纸、施工方案和目标状态确认构件位置、工序连续性及安全防护。'}
+                style={{ marginTop: 8, fontSize: 11 }}
+              />
+            )}
+          </Card>
+        )}
+
         {/* 7. 底部主操作按钮 */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', background: '#fff' }}>
+        <div className="ai-video-submit-bar">
           <Button
             block
             loading={submitting}
-            onClick={handleSubmit}
+            onClick={() => void handleSubmit()}
             icon={<PlayCircleOutlined />}
-            style={{
-              height: 44,
-              fontSize: 15,
-              fontWeight: 600,
-              border: 'none',
-              background: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)',
-              color: '#fff',
-              boxShadow: '0 4px 14px rgba(99, 102, 241, 0.35)',
-            }}
+            className="ai-video-submit"
           >
             开始生成视频
           </Button>
@@ -772,16 +1295,7 @@ export default function AiVideo() {
       </div>
 
       {/* ============ 右侧：视频模板素材库 ============ */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          background: '#fff',
-          borderRadius: 12,
-          border: '1px solid #f0f0f0',
-          padding: '16px 20px 24px',
-        }}
-      >
+      <div className="ai-video-library">
         {/* 1. 标题区 */}
         <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
           <div>
@@ -789,12 +1303,21 @@ export default function AiVideo() {
               专业视频渲染引擎
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
-              选择模板一键套用，或自定义提示词生成投标演示视频（独立提示词，不引用解说词）
+              选择模板一键套用，或自定义提示词生成投标演示视频
             </Text>
           </div>
           <Tag color="geekblue" style={{ fontSize: 11, marginBottom: 4 }}>
             图生视频 · 首尾帧
           </Tag>
+          <Button size="small" icon={<SafetyOutlined />} onClick={openAdvancedWorkbench} style={{ marginLeft: 8 }}>
+            施工配方制作
+          </Button>
+          <Button size="small" onClick={() => setDrawerOpen(true)} style={{ marginLeft: 8 }}>
+            版本中心
+          </Button>
+          <Button size="small" type="primary" icon={<UploadOutlined />} onClick={() => navigate(`/project/${projectId}/ai-video/templates/new`)} style={{ marginLeft: 8 }}>
+            从视频创建模板
+          </Button>
         </div>
 
         {/* 2. 分类 Tab */}
@@ -811,7 +1334,7 @@ export default function AiVideo() {
               key: 'creative',
               label: (
                 <span style={{ fontWeight: 600 }}>
-                  首尾帧·创意运镜
+                  首尾帧 / 多参考图·创意运镜
                   <Tag color="volcano" style={{ fontSize: 10, lineHeight: '16px', marginInlineStart: 6 }}>
                     NEW
                   </Tag>
@@ -821,13 +1344,33 @@ export default function AiVideo() {
           ]}
         />
 
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Text type="secondary" style={{ fontSize: 12 }}>模板范围</Text>
+          <Segmented
+            size="small"
+            value={templateScopeFilter}
+            onChange={(value) => setTemplateScopeFilter(value as 'all' | 'personal' | 'organization')}
+            options={[
+              { label: '全部可用', value: 'all' },
+              { label: '我的模板', value: 'personal' },
+              { label: '企业模板', value: 'organization' },
+            ]}
+          />
+        </Space>
+
         {/* 3. 模板瀑布 / 网格 */}
         {displayTemplates.length === 0 && <Empty description="当前分类暂无模板" style={{ marginTop: 40 }} />}
         <Row gutter={[16, 16]}>
           {displayTemplates.map((t) => {
             const preview = TEMPLATE_PREVIEWS[t.name] || {}
             const isFL = (t.applicable_modes || []).includes('first_last_frame_video')
+            const isMulti = (t.applicable_modes || []).includes('multi_reference_video') || (generationMode === 'multi_reference_video' && (t.applicable_modes || []).includes('image_to_video'))
             const selected = selectedTemplateId === t.id
+            const backendPreview = {
+              video: templateAssetUrl(t.preview_file_key) || preview.video,
+              first: templateAssetUrl(t.first_frame_file_key || t.cover_file_key) || preview.first,
+              last: templateAssetUrl(t.last_frame_file_key) || preview.last,
+            }
             return (
               <Col xs={24} md={12} lg={8} key={t.id}>
                 <Card
@@ -840,14 +1383,15 @@ export default function AiVideo() {
                     height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
-                    border: selected ? '1.5px solid #6366f1' : '1px solid #f0f0f0',
-                    boxShadow: selected ? '0 4px 16px rgba(99, 102, 241, 0.18)' : undefined,
+                    border: selected ? '1.5px solid #2457A6' : '1px solid #E4E9F0',
+                    boxShadow: selected ? '0 4px 16px rgba(36, 87, 166, 0.14)' : undefined,
                   }}
-                  cover={<TemplatePreview t={t} preview={preview} isFL={isFL} />}
+                  cover={<TemplatePreview t={t} preview={backendPreview} isFL={isFL} />}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
                     <Text strong style={{ fontSize: 14, flex: 1, minWidth: 0 }} ellipsis={{ tooltip: t.name }}>{t.name}</Text>
                     {isFL && <Tag color="purple" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>首尾帧</Tag>}
+                    {isMulti && <Tag color="cyan" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>多参考图</Tag>}
                   </div>
                   <Paragraph
                     type="secondary"
@@ -857,11 +1401,54 @@ export default function AiVideo() {
                     {t.description}
                   </Paragraph>
                   <div style={{ marginTop: 8, flexShrink: 0 }}>
+                    {(t.category || t.prompt_recipe?.category) && <Tag color="blue" style={{ fontSize: 11 }}>{t.category || t.prompt_recipe?.category}</Tag>}
                     {t.recommended_camera_motion && (
                       <Tag style={{ fontSize: 11, color: '#475569' }}>{t.recommended_camera_motion}</Tag>
                     )}
                     <Tag style={{ fontSize: 11, color: '#475569' }}>{t.recommended_duration}s</Tag>
+                    <Tag color={t.is_system || t.scope === 'organization' ? 'blue' : 'gold'} style={{ fontSize: 11 }}>
+                      {t.is_system ? '系统模板' : t.scope === 'personal' ? '个人模板' : '企业模板'}
+                    </Tag>
                   </div>
+                  <div style={{ minHeight: 26, marginTop: 4 }}>
+                    {(t.tags || []).slice(0, 3).map((tag) => <Tag key={tag} style={{ fontSize: 10, marginBottom: 4 }}>{tag}</Tag>)}
+                  </div>
+                  <Button
+                    type={selected ? 'primary' : 'default'}
+                    size="small"
+                    block
+                    icon={<ThunderboltOutlined />}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      openTemplateApply(t)
+                    }}
+                    style={{ marginTop: 8 }}
+                  >
+                    使用此模板
+                  </Button>
+                  {!t.is_system && (
+                    <Popconfirm
+                      title="删除这个模板？"
+                      description="删除后模板将从模板库移除，已生成的视频和历史任务不会受影响。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void handleDeleteTemplate(t)}
+                    >
+                      <Button
+                        type="link"
+                        danger
+                        size="small"
+                        block
+                        icon={<DeleteOutlined />}
+                        loading={deletingTemplateId === t.id}
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ marginTop: 4 }}
+                      >
+                        删除模板
+                      </Button>
+                    </Popconfirm>
+                  )}
                 </Card>
               </Col>
             )
@@ -869,60 +1456,130 @@ export default function AiVideo() {
         </Row>
       </div>
 
+      <Modal
+        title={templateToApply ? `套用模板：${templateToApply.name}` : '套用模板'}
+        open={templateApplyOpen}
+        onCancel={() => setTemplateApplyOpen(false)}
+        onOk={confirmTemplateApply}
+        okText="套用模板"
+        width={680}
+      >
+        {templateToApply && (
+          <div>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 14 }}>
+              多图施工模板的关键帧顺序就是动作本体。可直接使用样片关键帧复刻节奏，也可以替换为当前项目同阶段图片。
+            </Text>
+            {templateApplyMode === 'multi_reference_video' && (
+              <Alert
+                type={usingOriginalTemplateFrames ? 'success' : 'warning'}
+                showIcon
+                style={{ marginBottom: 14 }}
+                message={usingOriginalTemplateFrames ? '已带入样片原始施工关键帧（推荐）' : '当前正在使用替换图片'}
+                description={usingOriginalTemplateFrames
+                  ? `Seedance 将按 ${originalTemplateReferenceIds.length} 张关键帧的顺序理解施工节奏。`
+                  : '替换图片必须逐张对应模板中的施工阶段；只放首尾两张会退化为 AI 自由补间。'}
+                action={originalTemplateReferenceIds.length === templateReferenceCount(templateToApply)
+                  ? <Button size="small" onClick={() => setApplyReferenceIds(originalTemplateReferenceIds)}>恢复样片关键帧</Button>
+                  : undefined}
+              />
+            )}
+            <Row gutter={14}>
+              {templateApplyMode === 'multi_reference_video' ? (
+                <Col span={24}>
+                  <Text strong style={{ fontSize: 12 }}>施工关键帧（按实际发生顺序）</Text>
+                  <Select
+                    mode="multiple"
+                    maxCount={templateReferenceCount(templateToApply)}
+                    showSearch
+                    optionFilterProp="label"
+                    value={applyReferenceIds}
+                    placeholder={`按施工顺序选择 ${templateReferenceCount(templateToApply)} 张关键帧`}
+                    style={{ width: '100%', marginTop: 6 }}
+                    onChange={setApplyReferenceIds}
+                    options={refImages.map((image) => ({ label: image.name, value: image.id, image }))}
+                    optionRender={(option) => {
+                      const image = (option.data as { image?: ReferenceImage }).image
+                      return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
+                    }}
+                  />
+                </Col>
+              ) : <Col span={templateApplyMode === 'first_last_frame_video' ? 12 : 24}>
+                <Text strong style={{ fontSize: 12 }}>新的建筑首帧</Text>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  value={applyFirstFrameId || undefined}
+                  placeholder="选择素材库中的首帧图片"
+                  style={{ width: '100%', marginTop: 6 }}
+                  onChange={setApplyFirstFrameId}
+                  options={refImages.map((image) => ({ label: image.name, value: image.id, image }))}
+                  optionRender={(option) => {
+                    const image = (option.data as { image?: ReferenceImage }).image
+                    return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
+                  }}
+                />
+              </Col>}
+              {templateApplyMode === 'first_last_frame_video' && (
+                <Col span={12}>
+                  <Text strong style={{ fontSize: 12 }}>新的建筑尾帧</Text>
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    value={applyLastFrameId || undefined}
+                    placeholder="选择素材库中的尾帧图片"
+                    style={{ width: '100%', marginTop: 6 }}
+                    onChange={setApplyLastFrameId}
+                    options={refImages.map((image) => ({ label: image.name, value: image.id, image }))}
+                    optionRender={(option) => {
+                      const image = (option.data as { image?: ReferenceImage }).image
+                      return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
+                    }}
+                  />
+                </Col>
+              )}
+            </Row>
+            <Divider style={{ margin: '18px 0 12px' }} />
+            <Row gutter={14}>
+              <Col span={12}>
+                <Text strong style={{ fontSize: 12 }}>建筑主体描述（可选）</Text>
+                <Input.TextArea
+                  rows={3}
+                  value={applySubject}
+                  onChange={(event) => setApplySubject(event.target.value)}
+                  placeholder="例如：当前项目的白色幕墙办公楼"
+                  style={{ marginTop: 6 }}
+                />
+              </Col>
+              <Col span={12}>
+                <Text strong style={{ fontSize: 12 }}>场景与环境描述（可选）</Text>
+                <Input.TextArea
+                  rows={3}
+                  value={applyScene}
+                  onChange={(event) => setApplyScene(event.target.value)}
+                  placeholder="例如：阴天，前景保留施工道路和绿化"
+                  style={{ marginTop: 6 }}
+                />
+              </Col>
+            </Row>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginTop: 16 }}
+              message={`将自动带入：${templateToApply.recommended_duration}s · ${templateToApply.recommended_aspect_ratio} · ${templateToApply.recommended_resolution}`}
+              description="套用后仍可以在左侧编辑提示词和高级参数，再提交真实 Provider 生成。"
+            />
+          </div>
+        )}
+      </Modal>
+
       {/* ============ 生成任务与结果（抽屉） ============ */}
       <Drawer
-        title="生成任务与结果"
+        title="视频结果版本"
         placement="right"
         width={440}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
       >
-        <Text strong>任务状态</Text>
-        {tasks.length === 0 && <Empty description="暂无任务" style={{ marginTop: 12 }} />}
-        <List
-          size="small"
-          dataSource={tasks.slice(0, 8)}
-          renderItem={(t) => {
-            const st = STATUS_MAP[t.status] || { label: t.status, color: 'default' }
-            return (
-              <List.Item style={{ display: 'block', padding: '6px 0' }}>
-                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                  <Space size={6}>
-                    <Tag color={st.color} style={{ fontSize: 11 }}>{st.label}</Tag>
-                    <Text style={{ fontSize: 12 }}>{t.generation_mode === 'first_last_frame_video' ? '首尾帧' : '多图/图生'} · {t.progress}%</Text>
-                  </Space>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    {t.elapsed_seconds ? `${t.elapsed_seconds}s` : ''} {PROVIDER_LABELS[t.provider] || t.provider}
-                  </Text>
-                </Space>
-                {(t.status === 'queued' || t.status === 'running') && (
-                  <Progress percent={t.progress} size="small" style={{ margin: '4px 0 0' }} />
-                )}
-                {t.status === 'failed' && (
-                  <Tooltip title={t.error_message}>
-                    <Text type="danger" style={{ fontSize: 11, display: 'block' }} ellipsis>
-                      {t.error_message}
-                    </Text>
-                  </Tooltip>
-                )}
-                {t.status === 'running' && (
-                  <Button size="small" danger style={{ marginTop: 4 }} onClick={() => handleCancelJob(t)}>
-                    取消
-                  </Button>
-                )}
-                {t.status === 'failed' && (
-                  <Button size="small" icon={<ReloadOutlined />} style={{ marginTop: 4 }} onClick={() => handleRetryJob(t)}>
-                    重试
-                  </Button>
-                )}
-              </List.Item>
-            )
-          }}
-        />
-
-        <Divider style={{ margin: '16px 0' }} />
-
-        <Text strong>视频结果版本</Text>
         {versions.length === 0 && <Empty description="暂无结果版本" style={{ marginTop: 12 }} />}
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {versions.map((v) => (
@@ -947,24 +1604,23 @@ export default function AiVideo() {
                 )}
               </div>
               <Space style={{ marginTop: 6, width: '100%', justifyContent: 'space-between' }}>
-                <Text strong style={{ fontSize: 12 }}>V{v.version_number}</Text>
+                <Text strong style={{ fontSize: 12 }} ellipsis={{ tooltip: versionDisplayName(v) }}>
+                  {versionDisplayName(v)}
+                </Text>
                 <Text type="secondary" style={{ fontSize: 10 }}>
-                  seed:{v.seed ?? '-'} · {PROVIDER_LABELS[v.provider] || v.provider}
+                  V{v.version_number} · seed:{v.seed ?? '-'} · {PROVIDER_LABELS[v.provider] || v.provider}
                 </Text>
               </Space>
-              {v.bound_shot_title && (
-                <div style={{ marginTop: 4 }}>
-                  <Tag color="blue" icon={<LinkOutlined />} style={{ fontSize: 10 }}>
-                    已绑定：{v.bound_shot_title}
-                  </Tag>
-                </div>
-              )}
+              {v.quality_report?.warnings?.length ? <Tag color="orange" style={{ marginTop: 4 }}>质检：{v.quality_report.warnings[0]}</Tag> : <Tag color="green" style={{ marginTop: 4 }}>质检通过</Tag>}
               <Space style={{ marginTop: 6 }} wrap>
                 {v.result_url && (
-                  <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadAiVideo(v.result_url!)}>
+                  <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadAiVideo(v.result_url!, versionDownloadName(v))}>
                     下载
                   </Button>
                 )}
+                <Button size="small" icon={<EditOutlined />} onClick={() => openRenameVersion(v)}>
+                  重命名
+                </Button>
                 <Button
                   size="small"
                   type={v.is_selected ? 'default' : 'primary'}
@@ -972,9 +1628,6 @@ export default function AiVideo() {
                   onClick={() => handleSelectVersion(v)}
                 >
                   设为当前
-                </Button>
-                <Button size="small" icon={<LinkOutlined />} onClick={() => handleBindShot(v)}>
-                  绑定分镜
                 </Button>
                 <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteVersion(v)}>
                   删除
@@ -985,40 +1638,26 @@ export default function AiVideo() {
         </div>
       </Drawer>
 
-      {/* 悬浮入口：生成记录 */}
-      <FloatButton
-        icon={<PlayCircleOutlined />}
-        badge={runningCount ? { count: runningCount, color: '#7c3aed' } : undefined}
-        onClick={() => setDrawerOpen(true)}
-        tooltip="生成任务与结果"
-        style={{ right: 28, bottom: 28 }}
-      />
-
-      {/* 绑定分镜弹窗 */}
+      {/* 重命名视频版本弹窗 */}
       <Modal
-        title="绑定视频到分镜"
-        open={bindOpen}
-        onCancel={() => setBindOpen(false)}
-        onOk={confirmBind}
-        okText="绑定"
+        title="重命名视频版本"
+        open={!!renameVersionTarget}
+        onCancel={() => setRenameVersionTarget(null)}
+        onOk={handleRenameVersion}
+        okText="保存"
+        confirmLoading={renamingVersion}
       >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="将当前视频手动绑定到某个分镜。绑定不会修改解说词，也不影响已配置的视频任务。"
-        />
-        <Select
-          style={{ width: '100%' }}
-          placeholder="选择分镜"
-          value={bindShotId || undefined}
-          onChange={setBindShotId}
-          options={shots.map((s) => ({
-            value: s.id,
-            label: `#${s.sequence} ${s.title || '（无标题）'}`,
-          }))}
+        <Input
+          autoFocus
+          value={renameVersionValue}
+          maxLength={255}
+          showCount
+          placeholder="请输入视频版本名称"
+          onChange={(e) => setRenameVersionValue(e.target.value)}
+          onPressEnter={handleRenameVersion}
         />
       </Modal>
+
     </div>
   )
 }
@@ -1039,6 +1678,7 @@ function FrameSlot({
   onClear: () => void
   onUpload: (file: File) => void
 }) {
+  const [previewOpen, setPreviewOpen] = useState(false)
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <Text strong style={{ fontSize: 12, color: '#475569' }}>{label}</Text>
@@ -1046,17 +1686,19 @@ function FrameSlot({
         style={{
           marginTop: 6,
           position: 'relative',
-          height: 92,
+          height: 178,
           borderRadius: 8,
           border: '1px dashed #d9d9d9',
           overflow: 'hidden',
-          background: '#fafafa',
+          background: '#F8FAFC',
         }}
       >
         {frame ? (
           <>
-            <img src={frame.url} alt={frame.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            <Button size="small" icon={<ClearOutlined />} style={{ position: 'absolute', top: 4, right: 4 }} onClick={onClear} />
+            <button type="button" onClick={() => setPreviewOpen(true)} style={{ width: '100%', height: '100%', padding: 0, border: 0, background: '#eef2f7', cursor: 'zoom-in' }}>
+              <img src={frame.url} alt={frame.name} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+            </button>
+            <Button aria-label={`清除${label}`} size="small" icon={<ClearOutlined />} style={{ position: 'absolute', top: 6, right: 6 }} onClick={onClear} />
           </>
         ) : (
           <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1064,16 +1706,31 @@ function FrameSlot({
           </div>
         )}
       </div>
+      {frame && <div style={{ marginTop: 6, minHeight: 36 }}>
+        <Text strong ellipsis={{ tooltip: frame.name }} style={{ display: 'block', fontSize: 12 }}>{frame.name}</Text>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          {formatImageDimensions(frame.width, frame.height) && `${formatImageDimensions(frame.width, frame.height)} · `}
+          {frame.source || '素材库'}
+        </Text>
+      </div>}
       <Space style={{ marginTop: 6, width: '100%' }}>
         <Select
+          aria-label={`${label}素材选择`}
           size="small"
           style={{ flex: 1, minWidth: 0 }}
-          placeholder="选择"
+          placeholder="选择素材"
           value={frame?.id}
           onChange={onSelect}
           showSearch
           optionFilterProp="label"
-          options={images.map((i) => ({ value: i.id, label: i.name }))}
+          dropdownMatchSelectWidth={false}
+          dropdownStyle={{ minWidth: 320 }}
+          options={images.map((i) => ({ value: i.id, label: i.name, image: i }))}
+          optionRender={(option) => {
+            const image = (option.data as { image?: ReferenceImage }).image
+            const dimensions = formatImageDimensions(image?.width, image?.height)
+            return <Space style={{ width: '100%' }}><img src={image?.url} alt="" style={{ width: 52, height: 38, objectFit: 'contain', background: '#eef2f7', borderRadius: 4 }} /><span style={{ minWidth: 0 }}><Text ellipsis={{ tooltip: option.label as string }} style={{ display: 'block', maxWidth: 220 }}>{option.label}</Text>{dimensions && <Text type="secondary" style={{ fontSize: 11 }}>{dimensions}</Text>}</span></Space>
+          }}
         />
         <Upload
           accept=".jpg,.jpeg,.png,.webp"
@@ -1088,6 +1745,9 @@ function FrameSlot({
           </Button>
         </Upload>
       </Space>
+      <Modal open={previewOpen} title={frame?.name || label} footer={null} onCancel={() => setPreviewOpen(false)} width={760} centered>
+        {frame && <img src={frame.url} alt={frame.name} style={{ width: '100%', maxHeight: '70vh', objectFit: 'contain', background: '#f3f5f8' }} />}
+      </Modal>
     </div>
   )
 }
@@ -1107,7 +1767,7 @@ function TemplatePreview({
       style={{
         position: 'relative',
         height: 160,
-        background: 'linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%)',
+        background: '#F0F4FA',
         overflow: 'hidden',
       }}
     >

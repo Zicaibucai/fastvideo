@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,7 @@ class ProjectOut(TimestampedModel):
     code: str | None
     description: str | None
     status: str
+    last_entered_at: datetime | None
 
     bid_area: float | None
     area_source_page: int | None

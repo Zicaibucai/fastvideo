@@ -53,13 +53,6 @@ class Asset(BaseModel):
     project = relationship("Project", back_populates="assets")
 
     # 被分镜引用的反向关系（不级联删除，仅用于查询）
-    shot_as_image = relationship(
-        "StoryboardShot",
-        foreign_keys="StoryboardShot.image_asset_id",
-        lazy="noload",
-        viewonly=True,
-        overlaps="image_asset",
-    )
     shot_as_video = relationship(
         "StoryboardShot",
         foreign_keys="StoryboardShot.video_asset_id",

@@ -62,7 +62,6 @@ class SourceImageMeta(BaseModel):
     project_stage: str | None = None
     camera_angle: str = Field(default="建筑人视")
     is_original_model_shot: bool = True
-    storyboard_shot_id: str | None = None
     license_note: str | None = None
 
 
@@ -90,7 +89,6 @@ class SourceImageOut(TimestampedModel):
 # ---------- RenderJob ----------
 class RenderTaskCreate(BaseModel):
     source_asset_id: str
-    storyboard_shot_id: str | None = None
     preset_id: str | None = None
     operation_type: OperationType = "render"
     positive_prompt: str = ""
@@ -121,7 +119,6 @@ class RenderTaskCreate(BaseModel):
 class RenderTaskOut(BaseModel):
     id: str
     project_id: str
-    storyboard_shot_id: str | None
     source_asset_id: str | None
     preset_id: str | None
     operation_type: str
@@ -182,13 +179,8 @@ class CompareRequest(BaseModel):
     version_ids: list[str] = Field(min_length=1)
 
 
-class SelectVersionRequest(BaseModel):
-    version_id: str
-
-
 class InpaintRequest(BaseModel):
     source_asset_id: str
-    storyboard_shot_id: str | None = None
     mask_asset_id: str
     positive_prompt: str = ""
     variant_count: int = Field(default=1, ge=1, le=4)
@@ -198,7 +190,6 @@ class InpaintRequest(BaseModel):
 
 class OutpaintRequest(BaseModel):
     source_asset_id: str
-    storyboard_shot_id: str | None = None
     positive_prompt: str = ""
     target_ratio: str = "16:9"
     output_width: int | None = None
@@ -210,6 +201,5 @@ class OutpaintRequest(BaseModel):
 
 class UpscaleRequest(BaseModel):
     source_asset_id: str
-    storyboard_shot_id: str | None = None
     scale: int = 2
     idempotency_key: str | None = None

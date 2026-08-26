@@ -1,4 +1,4 @@
-"""视频合成引擎（FFmpeg）。
+"""视频合成引擎（FFmpeg + 可选 RIFE）。
 
 提供：
 - 图片 → 动态分段（Ken Burns 运动 + 适配）
@@ -7,6 +7,7 @@
 - 多分段转场拼接（xfade）
 - 音频拼接（acrossfade）+ 背景音乐 + 自动 ducking
 - Logo 叠加、片头片尾标题卡、音视频 mux
+- Apple Silicon 上可用 rife-metal 做高质量补帧，选择 RIFE 时失败会明确报错
 
 安全：所有 FFmpeg 调用使用参数数组 / 过滤器脚本文件，禁止把用户文本拼进 shell。
 """
@@ -15,11 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
+from functools import lru_cache
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -85,6 +88,91 @@ def _run(cmd: list[str], timeout: int = 600) -> None:
         stderr = proc.stderr.decode(errors="replace")
         logger.warning("ffmpeg_failed", cmd=" ".join(str(c) for c in cmd[:8]), stderr=stderr[-600:])
         raise RuntimeError(f"FFmpeg 处理失败: {stderr[-900:]}")
+
+
+@lru_cache(maxsize=1)
+def _has_filter(name: str) -> bool:
+    """检查当前 FFmpeg 是否带指定滤镜（发行版可能裁剪 drawtext）。"""
+    try:
+        proc = subprocess.run(
+            [settings.ffmpeg_binary, "-hide_banner", "-filters"],
+            capture_output=True, text=True, timeout=20,
+        )
+        return proc.returncode == 0 and any(line.split()[-1:] == [name] for line in proc.stdout.splitlines())
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+class _RifeUnavailable(RuntimeError):
+    """RIFE 未安装或当前输入无法由 RIFE 处理。"""
+
+
+def _rife_executable() -> str | None:
+    configured = (settings.rife_binary or "").strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    if path.is_file() and path.stat().st_mode & 0o111:
+        return str(path)
+    return shutil.which(configured)
+
+
+def _rife_model_path(executable: str) -> str | None:
+    configured = (settings.rife_model or "").strip()
+    if configured:
+        return configured if Path(configured).is_file() else None
+    resolved = Path(executable).resolve()
+    for parent in resolved.parents:
+        if parent.name == "homebrew":
+            candidate = parent / "share" / "rife-metal" / "rife-v4.26.rmw"
+            if candidate.is_file():
+                return str(candidate)
+    candidate = resolved.parent.parent / "share" / "rife-metal" / "rife-v4.26.rmw"
+    return str(candidate) if candidate.is_file() else None
+
+
+def _run_rife_pair(executable: str, previous: Path, current: Path, output: Path) -> None:
+    cmd = [executable, "-0", str(previous), "-1", str(current), "-o", str(output)]
+    model = _rife_model_path(executable)
+    if not model:
+        raise _RifeUnavailable("未找到 rife-metal 模型文件，请配置 RIFE_MODEL")
+    cmd.extend(["-m", model, "--tier", settings.rife_tier])
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=max(30, int(settings.rife_timeout)),
+        )
+    except FileNotFoundError as exc:
+        raise _RifeUnavailable("未找到 rife-metal") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise _RifeUnavailable("rife-metal 处理超时") from exc
+    if proc.returncode != 0 or not output.exists():
+        detail = proc.stderr.decode(errors="replace")[-500:]
+        raise _RifeUnavailable(f"rife-metal 执行失败：{detail}")
+
+
+def _fit_video_filter(width: int, height: int, fit_mode: str) -> str:
+    """返回不带输入/输出标签的画面适配滤镜，供 FFmpeg 与 RIFE 共用。"""
+    if fit_mode == "fill":
+        return f"scale={width}:{height}"
+    if fit_mode == "contain":
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        )
+    if fit_mode == "blur":
+        return (
+            f"split=2[bg][fg];"
+            f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=20[bgb];"
+            f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fgs];"
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2"
+        )
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height}"
+    )
 
 
 def probe_media(data: bytes, suffix: str = ".mp4") -> dict[str, Any]:
@@ -238,8 +326,10 @@ def render_image_segment(
                 f"s={width}x{height}:fps={fps},format=yuv420p[v]"
             )
 
-        if ass_path:
-            vf += f";[v]ass='{ass_path}'[v]"
+        if ass_path and _has_filter("ass"):
+            # ass 滤镜路径不使用 shell 引号；单引号在部分 FFmpeg 构建中会被当作路径字符。
+            safe_ass = str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
+            vf += f";[v]ass={safe_ass}[v]"
 
         if audio_path:
             graph = f"{vf};[1:a]{_audio_filter(duration, volume)}[a]"
@@ -270,6 +360,108 @@ def render_image_segment(
 # 视频素材 → 分段
 # ============================================================
 
+def _render_rife_segment(
+    video_bytes: bytes,
+    *,
+    duration: float,
+    fit_mode: str,
+    width: int,
+    height: int,
+    fps: int,
+    audio_bytes: bytes | None,
+    volume: float,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> bytes:
+    """使用 rife-metal 逐帧补中间帧，再由 FFmpeg 封装音视频。
+
+    rife-metal 当前提供帧对帧 CLI，因此这里把视频拆成图片序列，逐对生成
+    中间帧；输出序列按目标时长重新定时。RIFE 不可用或任一帧失败时直接报错，
+    不静默切换到精度不同的 FFmpeg minterpolate。
+    """
+    executable = _rife_executable()
+    if not executable:
+        raise _RifeUnavailable("未安装 rife-metal，请配置 RIFE_BINARY")
+    info = probe_media(video_bytes, suffix=".mp4")
+    source_fps = float(info.get("fps") or fps or 24)
+    if source_fps <= 0:
+        source_fps = 24.0
+
+    with _tmpdir() as tmp:
+        src = _write(video_bytes, tmp / "src.mp4")
+        source_frames = tmp / "source_frames"
+        output_frames = tmp / "output_frames"
+        source_frames.mkdir()
+        output_frames.mkdir()
+
+        # RIFE 处理的是画面帧；先统一画布，避免模型在每一对帧上重复缩放。
+        fit = "cover" if fit_mode == "blur" else fit_mode
+        vf = _fit_video_filter(width, height, fit)
+        extract_cmd = [
+            settings.ffmpeg_binary, "-y", "-i", str(src),
+            "-vf", vf,
+            "-vsync", "0", "-q:v", "2",
+            str(source_frames / "frame_%08d.png"),
+        ]
+        try:
+            _run(extract_cmd, timeout=max(120, int(settings.rife_timeout)))
+        except RuntimeError as exc:
+            raise _RifeUnavailable(f"RIFE 输入帧提取失败：{exc}") from exc
+
+        frames = sorted(source_frames.glob("frame_*.png"))
+        if len(frames) < 2:
+            raise _RifeUnavailable("RIFE 至少需要两帧输入")
+
+        # RIFE 是逐对帧推理，原先整个阶段一直停在 30%，容易被误认为卡死。
+        # 将进度限制在 32~76%，把封装阶段留给上层的 80% 里程碑。
+        if progress_callback:
+            progress_callback(32, f"RIFE 已提取 {len(frames)} 帧，开始补帧…")
+
+        output_index = 1
+        shutil.copyfile(frames[0], output_frames / f"frame_{output_index:08d}.png")
+        output_index += 1
+        pair_count = len(frames) - 1
+        last_progress = 32
+        for pair_index, (previous, current) in enumerate(zip(frames, frames[1:]), start=1):
+            middle = tmp / f"middle_{output_index:08d}.png"
+            _run_rife_pair(executable, previous, current, middle)
+            shutil.copyfile(middle, output_frames / f"frame_{output_index:08d}.png")
+            output_index += 1
+            shutil.copyfile(current, output_frames / f"frame_{output_index:08d}.png")
+            output_index += 1
+            if progress_callback:
+                current_progress = 32 + int(42 * pair_index / max(pair_count, 1))
+                if current_progress != last_progress:
+                    last_progress = current_progress
+                    progress_callback(current_progress, f"RIFE 补帧中… {pair_index}/{pair_count}")
+
+        frame_count = output_index - 1
+        # 让补帧后的整段恰好落在目标时长，再由 -r 统一到工程帧率。
+        sequence_fps = max(1.0, frame_count / max(duration, 0.3))
+        if audio_bytes:
+            audio = _write(audio_bytes, tmp / "audio.wav")
+        else:
+            audio = _write(make_silence_wav(duration), tmp / "silence.wav")
+        if progress_callback:
+            progress_callback(76, "RIFE 补帧完成，正在封装视频…")
+        out = tmp / "rife_segment.mp4"
+        cmd = [
+            settings.ffmpeg_binary, "-y",
+            "-framerate", f"{sequence_fps:.6f}",
+            "-i", str(output_frames / "frame_%08d.png"),
+            "-i", str(audio),
+            "-filter_complex", f"[1:a]{_audio_filter(duration, volume)}[a]",
+            "-map", "0:v", "-map", "[a]", "-t", str(duration),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-r", str(fps),
+            "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2",
+            "-movflags", "+faststart", str(out),
+        ]
+        try:
+            _run(cmd, timeout=max(120, int(settings.rife_timeout)))
+        except RuntimeError as exc:
+            raise _RifeUnavailable(f"RIFE 输出封装失败：{exc}") from exc
+        return _read(out)
+
 def render_video_segment(
     video_bytes: bytes,
     *,
@@ -282,12 +474,38 @@ def render_video_segment(
     audio_bytes: bytes | None = None,
     volume: float = 1.0,
     short_video: str = "loop",  # loop | freeze | trim
+    time_adaptation: str = "natural",  # natural | safe_stretch | rife | interpolate | loop | freeze | stretch
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> bytes:
-    """视频素材标准化：统一 H.264/AAC/分辨率/fps，短素材可循环或冻结尾帧。"""
+    """视频素材标准化，并按目标分段时长自动调整播放速度。"""
     duration = max(duration, 0.3)
     info = probe_media(video_bytes, suffix=".mp4")
     src_duration = float(info.get("duration_seconds") or 0)
-    loop = short_video == "loop" and src_duration < duration
+    # 视频工程默认采用时间拉伸：不重复画面，按 source_duration / target_duration 调速。
+    # 保留 loop/trim 模式供底层兼容调用。
+    speed_ratio = (src_duration / duration) if src_duration > 0 else 1.0
+    if time_adaptation == "rife":
+        try:
+            return _render_rife_segment(
+                video_bytes,
+                duration=duration,
+                fit_mode=fit_mode,
+                width=width,
+                height=height,
+                fps=fps,
+                audio_bytes=audio_bytes,
+                volume=volume,
+                progress_callback=progress_callback,
+            )
+        except _RifeUnavailable as exc:
+            # RIFE 是用户明确选择的高质量策略，不允许静默降级导致结果质量变化。
+            logger.error("rife_required_but_unavailable", reason=str(exc))
+            if progress_callback:
+                progress_callback(35, f"RIFE 失败：{str(exc)[:100]}")
+            raise
+    # 旧 stretch 调用保留兼容，但只有安全区间才允许改变速度，避免 10/15 秒视频被强行慢放。
+    stretch = time_adaptation in ("stretch", "safe_stretch") and src_duration > 0 and 0.85 <= speed_ratio <= 1.15
+    loop = time_adaptation == "loop" or (time_adaptation == "natural" and short_video == "loop" and src_duration < duration)
 
     with _tmpdir() as tmp:
         src = tmp / "src.mp4"
@@ -318,6 +536,16 @@ def render_video_segment(
                 f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
                 f"crop={width}:{height}"
             )
+        if stretch:
+            time_scale = duration / src_duration
+            vf += f",setpts={time_scale:.6f}*PTS"
+        elif time_adaptation == "freeze" and src_duration > 0 and src_duration < duration:
+            vf += f",tpad=stop_mode=clone:stop_duration={max(duration-src_duration, 0):.3f}"
+        elif time_adaptation == "interpolate" and src_duration > 0 and speed_ratio < 1:
+            # 先把时间轴放慢到目标时长，再用运动插值补足中间帧；否则仅提高 fps
+            # 只会复制帧，无法解决 10/15 秒成片的卡顿问题。
+            time_scale = duration / src_duration
+            vf += f",setpts={time_scale:.6f}*PTS,minterpolate=mi_mode=mci:mc_mode=aobmc:me_mode=bidir"
         vf += f",fps={fps},format=yuv420p[v]"
 
         audio_path: Path | None = None
@@ -338,7 +566,8 @@ def render_video_segment(
             "-filter_complex", graph,
             "-map", "[v]", "-map", "[a]",
             "-t", str(duration),
-            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            # 分段预览/中间产物优先响应速度，正式导出仍由最终合成阶段统一编码。
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-pix_fmt", "yuv420p", "-r", str(fps),
             "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2",
             "-movflags", "+faststart",
@@ -376,17 +605,21 @@ def render_title_card(
             "-i", f"color=c=0x{color}:s={width}x{height}:d={duration}:r={fps}",
         ]
         # drawtext 使用 textfile 避免命令注入
-        draw = (
-            f"drawtext=textfile='{txt}':fontcolor=white:fontsize={int(height * 0.08)}:"
-            f"x=(w-text_w)/2:y=(h-text_h)/2-60"
-        )
-        if sub_text:
-            sub = tmp / "sub.txt"
-            _write(sub_text.replace("\n", " ").encode("utf-8"), sub)
-            draw += (
-                f",drawtext=textfile='{sub}':fontcolor=white@0.85:fontsize={int(height * 0.04)}:"
-                f"x=(w-text_w)/2:y=(h-text_h)/2+60"
+        if _has_filter("drawtext"):
+            draw = (
+                f"drawtext=textfile='{txt}':fontcolor=white:fontsize={int(height * 0.08)}:"
+                f"x=(w-text_w)/2:y=(h-text_h)/2-60"
             )
+            if sub_text:
+                sub = tmp / "sub.txt"
+                _write(sub_text.replace("\n", " ").encode("utf-8"), sub)
+                draw += (
+                    f",drawtext=textfile='{sub}':fontcolor=white@0.85:fontsize={int(height * 0.04)}:"
+                    f"x=(w-text_w)/2:y=(h-text_h)/2+60"
+                )
+        else:
+            # 没有 drawtext 时仍输出可播放的纯色标题卡，不能让整条导出链失败。
+            draw = "format=yuv420p"
         # 淡入淡出
         vf = f"[0:v]{draw},fade=t=in:d=0.4,fade=t=out:st={max(0, duration - 0.5)}:d=0.5,fps={fps},format=yuv420p[v]"
 

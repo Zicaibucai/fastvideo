@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Layout, Menu, Button, Dropdown, Avatar, Tag } from 'antd'
+import { Layout, Menu, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   HomeOutlined,
@@ -9,31 +9,29 @@ import {
   SoundOutlined,
   AudioOutlined,
   ExportOutlined,
-  UserOutlined,
-  LogoutOutlined,
-  ExperimentOutlined,
   BookOutlined,
   DatabaseOutlined,
   BgColorsOutlined,
   VideoCameraAddOutlined,
+  ArrowLeftOutlined,
+  DownOutlined,
+  SettingOutlined,
   ProjectOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { useAuth } from '../stores/auth'
-import { systemApi, projectApi } from '../api'
+import { projectApi } from '../api'
+import type { Project } from '../api/types'
+import { rememberProjectOpened } from '../recentProjects'
+import ProjectNotificationCenter, { ProjectNotificationProvider } from './ProjectNotificationCenter'
 
-const { Sider, Header, Content } = Layout
-
-// 会话内记住最近打开的项目，避免离开项目页后左侧项目菜单整个消失
-const CURRENT_PROJECT_KEY = 'fastvideo_current_project_id'
-const PROJECT_WORKSPACE_KEY = '__project_workspace__'
+const { Sider, Content } = Layout
 
 /** 某个项目下的全部工作区页面（渲染为二级菜单项） */
 function projectWorkspaceItems(projectId: string): NonNullable<MenuProps['items']> {
   return [
     { key: `/project/${projectId}`, icon: <FileTextOutlined />, label: '招标资料' },
     { key: `/project/${projectId}/reader`, icon: <BookOutlined />, label: '文档阅读器' },
-    { key: `/project/${projectId}/facts`, icon: <DatabaseOutlined />, label: '工程参数台账' },
+    { key: `/project/${projectId}/facts`, icon: <DatabaseOutlined />, label: '工程信息核对' },
     { key: `/project/${projectId}/storyboard`, icon: <VideoCameraOutlined />, label: '解说词与分镜' },
     { key: `/project/${projectId}/render`, icon: <BgColorsOutlined />, label: '画面制作' },
     { key: `/project/${projectId}/ai-video`, icon: <VideoCameraAddOutlined />, label: 'AI 视频生成' },
@@ -75,51 +73,34 @@ function findSelectedKey(pathname: string, items: MenuProps['items']): string {
 export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { user, logout } = useAuth()
-  const [mockMode, setMockMode] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 1100,
+  )
   const [projectName, setProjectName] = useState<string | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
 
-  // 当前项目 ID：优先取 URL，其次取本会话最近打开过的项目
   const pathSegs = location.pathname.split('/').filter(Boolean)
   const urlProjectId = pathSegs[0] === 'project' && pathSegs[1] ? pathSegs[1] : null
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(() =>
-    urlProjectId ?? sessionStorage.getItem(CURRENT_PROJECT_KEY),
-  )
-  const [openKeys, setOpenKeys] = useState<string[]>(() =>
-    currentProjectId ? [PROJECT_WORKSPACE_KEY] : [],
-  )
 
-  // 进入项目页时记住项目，保证切到「项目总览 / 投标项目」后菜单仍然稳定
-  useEffect(() => {
-    if (urlProjectId) {
-      sessionStorage.setItem(CURRENT_PROJECT_KEY, urlProjectId)
-      setCurrentProjectId(urlProjectId)
-    }
-  }, [urlProjectId])
-
-  // 有当前项目时始终保持工作区菜单展开
-  useEffect(() => {
-    setOpenKeys((prev) =>
-      currentProjectId
-        ? prev.includes(PROJECT_WORKSPACE_KEY)
-          ? prev
-          : [...prev, PROJECT_WORKSPACE_KEY]
-        : [],
-    )
-  }, [currentProjectId])
-
-  // 拉取当前项目名称作为分组标题（仅当 URL 确实指向项目时请求，避免为过期记忆报错）
   useEffect(() => {
     if (!urlProjectId) return
+    rememberProjectOpened(urlProjectId)
     let cancelled = false
-    projectApi
-      .detail(urlProjectId)
-      .then((res) => {
-        if (!cancelled) setProjectName(res.data.name)
+    Promise.all([
+      projectApi.detail(urlProjectId),
+      projectApi.list({ page_size: 100 }),
+    ])
+      .then(([detail, list]) => {
+        if (!cancelled) {
+          setProjectName(detail.data.name)
+          setProjects(list.data.items)
+        }
       })
       .catch(() => {
-        if (!cancelled) setProjectName(null)
+        if (!cancelled) {
+          setProjectName(null)
+          setProjects([])
+        }
       })
     return () => {
       cancelled = true
@@ -127,95 +108,96 @@ export default function AppLayout() {
   }, [urlProjectId])
 
   useEffect(() => {
-    systemApi
-      .status()
-      .then((res) => setMockMode(res.data.ai.mock_mode))
-      .catch(() => {})
+    const media = window.matchMedia('(max-width: 1099px)')
+    const syncCollapsed = () => setCollapsed(media.matches)
+    syncCollapsed()
+    media.addEventListener('change', syncCollapsed)
+    return () => media.removeEventListener('change', syncCollapsed)
   }, [])
 
   const menuItems = useMemo<MenuProps['items']>(() => {
-    const items: NonNullable<MenuProps['items']> = [
-      { key: '/', icon: <HomeOutlined />, label: '项目总览' },
-      { key: '/projects', icon: <FolderOpenOutlined />, label: '投标项目' },
-    ]
-    if (currentProjectId) {
-      items.push(
-        { type: 'divider' },
-        {
-          key: PROJECT_WORKSPACE_KEY,
-          icon: <ProjectOutlined />,
-          label: projectName || '当前项目',
-          className: 'workspace-submenu-title',
-          children: projectWorkspaceItems(currentProjectId),
-        },
-      )
+    if (!urlProjectId) {
+      return [
+        { key: '/', icon: <HomeOutlined />, label: '项目总览' },
+        { key: '/projects', icon: <FolderOpenOutlined />, label: '投标项目' },
+        { key: '/account-settings', icon: <SettingOutlined />, label: '账号与 AI 设置' },
+      ]
     }
-    return items
-  }, [currentProjectId, projectName])
+    const workspaceItems = projectWorkspaceItems(urlProjectId)
+    return [
+      { key: '/projects', icon: <ArrowLeftOutlined />, label: '返回投标项目' },
+      { type: 'divider' },
+      ...(collapsed
+        ? workspaceItems
+        : [{ type: 'group' as const, label: '项目工作区', children: workspaceItems }]),
+    ]
+  }, [collapsed, urlProjectId])
 
   const selectedKey = useMemo(
     () => findSelectedKey(location.pathname, menuItems),
     [location.pathname, menuItems],
   )
 
+  const projectSwitcherItems = projects.map((project) => ({
+    key: project.id,
+    label: project.name,
+  }))
+
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout className="app-root-layout" style={{ minHeight: '100dvh' }}>
       <Sider
         className="app-sider"
         collapsible
         collapsed={collapsed}
         onCollapse={setCollapsed}
-        theme="dark"
-        width={232}
+        theme="light"
+        width={216}
+        collapsedWidth={64}
       >
-        <div className="app-logo">🏗️ {collapsed ? '' : 'AI投标视频平台'}</div>
+        <div className={`app-logo${collapsed ? ' is-collapsed' : ''}`} aria-label="微影">
+          {collapsed ? (
+            <ProjectOutlined className="app-brand-mark" aria-hidden="true" />
+          ) : (
+            <>
+              <span className="app-brand-name">微影</span>
+              <span className="app-brand-credit">由中建八局制作</span>
+            </>
+          )}
+        </div>
+        {urlProjectId && !collapsed && (
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: projectSwitcherItems,
+              onClick: ({ key }) => navigate(`/project/${key}`),
+            }}
+          >
+            <button type="button" className="app-project-switcher">
+              <span className="app-project-switcher-label">当前项目</span>
+              <span className="app-project-switcher-name">{projectName || '加载项目中'}</span>
+              <DownOutlined className="app-project-switcher-icon" />
+            </button>
+          </Dropdown>
+        )}
         <Menu
-          theme="dark"
+          theme="light"
           mode="inline"
           selectedKeys={[selectedKey]}
-          openKeys={openKeys}
-          onOpenChange={setOpenKeys}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
         />
       </Sider>
-      <Layout>
-        <Header
-          style={{
-            background: '#fff',
-            padding: '0 24px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-          }}
-        >
-          <div>
-            {mockMode && (
-              <Tag color="orange" icon={<ExperimentOutlined />}>
-                Mock 演示模式（核心 AI 服务未配置）
-              </Tag>
-            )}
+      <Layout className="app-main-layout">
+        <Content className="app-content" style={{ padding: '28px 32px 40px' }}>
+          <div className="app-content-inner">
+            <ProjectNotificationProvider
+              key={urlProjectId || 'global'}
+              projectId={urlProjectId}
+            >
+              <Outlet />
+              {urlProjectId && <ProjectNotificationCenter projectId={urlProjectId} />}
+            </ProjectNotificationProvider>
           </div>
-          <Dropdown
-            menu={{
-              items: [{ key: 'logout', icon: <LogoutOutlined />, label: '退出登录' }],
-              onClick: ({ key }) => {
-                if (key === 'logout') {
-                  logout()
-                  navigate('/login')
-                }
-              },
-            }}
-          >
-            <Button type="text" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Avatar size="small" icon={<UserOutlined />} />
-              {user?.username || '未登录'}
-            </Button>
-          </Dropdown>
-        </Header>
-        <Content style={{ margin: 16 }}>
-          <Outlet />
         </Content>
       </Layout>
     </Layout>

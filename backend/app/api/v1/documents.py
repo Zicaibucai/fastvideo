@@ -34,8 +34,8 @@ from app.tasks.document_parse import parse_document_sync, parse_document_task
 
 router = APIRouter(prefix="/projects/{project_id}/documents", tags=["招标资料"])
 
-ALLOWED_TYPES = {".pdf", ".docx", ".doc", ".txt"}
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+ALLOWED_TYPES = {".pdf", ".docx", ".txt"}
+MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB，超过走分片上传
 
 
 def _get_owned_project(db: Session, project_id: str, user: User) -> Project:
@@ -52,19 +52,28 @@ def _safe_filename(name: str) -> str:
     return name.strip() or "未命名文件"
 
 
-def _detect_real_type(filename: str, content: bytes) -> str:
-    """校验扩展名与实际文件类型。"""
+def _detect_real_type(filename: str, content: bytes) -> str | None:
+    """校验扩展名与实际文件类型（魔数）。返回 file_type，不合法返回 None。"""
     ext = Path(filename).suffix.lower()
-    # 检查魔数
-    if content[:5] == b"%PDF-":
-        return "pdf"
-    if content[:2] == b"PK" and ext == ".docx":
-        return "docx"
+    if ext == ".pdf":
+        return "pdf" if content[:5] == b"%PDF-" else None
+    if ext == ".docx":
+        # docx 本质是 zip 包，PK\x03\x04 / PK\x05\x06(空包) / PK\x07\x08
+        if content[:2] == b"PK":
+            return "docx"
+        return None
     if ext == ".txt":
-        return "txt"
-    if ext == ".doc":
-        return "docx"  # 简化处理
-    return "pdf" if ext == ".pdf" else ext.lstrip(".") or "other"
+        # 纯文本：尝试常见编码，二进制内容（含大量 NUL）视为不合法
+        if b"\x00" in content[:4096]:
+            return None
+        for enc in ("utf-8", "gbk", "gb18030", "latin-1"):
+            try:
+                content.decode(enc)
+                return "txt"
+            except UnicodeDecodeError:
+                continue
+        return None
+    return None
 
 
 def _upload_out(session: DocumentUploadSession) -> ResumableUploadOut:
@@ -169,12 +178,14 @@ async def upload_document(
 
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
-        raise ConflictError(f"文件超过 {MAX_FILE_SIZE // 1024 // 1024}MB 上限")
+        raise ConflictError(f"文件超过 {MAX_FILE_SIZE // 1024 // 1024}MB 上限，请使用分片上传")
 
-    # 校验实际文件类型
+    # 校验实际文件类型（扩展名 + 魔数）
     real_type = _detect_real_type(original_name, content)
-    if real_type not in ("pdf", "docx", "txt"):
-        raise ConflictError(f"文件实际类型 {real_type} 不支持")
+    if real_type is None:
+        raise ConflictError(
+            "文件内容与扩展名不符或已损坏；仅支持 PDF、DOCX、TXT（旧版 .doc 请另存为 .docx）"
+        )
 
     # SHA-256 去重
     sha256 = compute_sha256(content)
@@ -357,9 +368,12 @@ def complete_resumable_upload(
             raise ConflictError("合并后的文件大小校验失败")
 
         with assembled.open("rb") as source:
-            real_type = _detect_real_type(session.file_name, source.read(64 * 1024))
-        if real_type not in ("pdf", "docx", "txt"):
-            raise ConflictError(f"文件实际类型 {real_type} 不支持")
+            head = source.read(64 * 1024)
+        real_type = _detect_real_type(session.file_name, head)
+        if real_type is None:
+            raise ConflictError(
+                "文件内容与扩展名不符或已损坏；仅支持 PDF、DOCX、TXT（旧版 .doc 请另存为 .docx）"
+            )
 
         ext = Path(session.file_name).suffix.lower()
         key = f"projects/{project_id}/documents/{uuid.uuid4().hex}{ext}"
@@ -605,7 +619,7 @@ def delete_document(
 
     referenced_shots = (
         db.query(StoryboardShot)
-        .filter(StoryboardShot.project_id == project_id)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
         .all()
     )
     for shot in referenced_shots:

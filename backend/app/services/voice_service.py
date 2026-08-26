@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.factory import get_tts_adapter
@@ -232,6 +233,9 @@ def generate_voice_version(
     create_assets: bool = True,
 ) -> AudioVersion:
     """为单个分镜生成一个新配音版本（V1 起递增，不覆盖历史版本）。"""
+    from app.services.ai_configuration import refresh_runtime_config_from_db
+
+    refresh_runtime_config_from_db()
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id:
         raise VoiceError("分镜不存在")
@@ -343,11 +347,15 @@ def generate_voice_version(
             audio_asset_id = audio_asset_id or mp3_asset_id
 
     # 版本号
-    max_ver = db.query(AudioVersion).filter(
+    # Keep version numbers monotonic even after a soft delete.  Counting only
+    # live rows could reuse Vn and make old exports ambiguous.
+    # Serialize allocation for this shot on databases that support row locks;
+    # the unique constraint remains the final guard for other backends.
+    db.query(StoryboardShot).filter(StoryboardShot.id == shot_id).with_for_update().one()
+    max_ver = db.query(func.max(AudioVersion.version_number)).filter(
         AudioVersion.storyboard_shot_id == shot_id,
-        AudioVersion.is_deleted.is_(False),
-    ).count()
-    version_number = max_ver + 1
+    ).scalar()
+    version_number = int(max_ver or 0) + 1
 
     # 时长适配状态
     duration_status, diff, ratio = _classify_duration(target, actual_duration)
@@ -492,10 +500,10 @@ def _apply_selection(db: Session, shot: StoryboardShot, version: AudioVersion, u
     shot.tts_voice_id = version.voice_id
     shot.status = "edited"
 
-    # 标记相关视频分段需要重建
-    from app.services.render_service import _mark_video_segments_rebuild
+    # 标记相关视频分段需要重建（配音仍按分镜管理，和画面素材解耦）
+    from app.services.video_project_service import mark_segments_needs_rebuild
 
-    _mark_video_segments_rebuild(db, shot.project_id, shot.id, reason="分镜正式配音已更换")
+    mark_segments_needs_rebuild(db, shot.project_id, shot.id, reason="分镜正式配音已更换")
 
 
 # ============================================================
@@ -656,7 +664,7 @@ def export_project_srt(db: Session, project_id: str) -> bytes:
     """项目级 SRT：按分镜顺序累计（当前以分镜 durationSeconds 为基准，标为估算）。"""
     shots = (
         db.query(StoryboardShot)
-        .filter(StoryboardShot.project_id == project_id)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
         .order_by(StoryboardShot.sequence.asc())
         .all()
     )
@@ -699,7 +707,7 @@ def export_voice_audio_zip(
     """导出全部正式配音为 zip（WAV 或 MP3）。"""
     shots = (
         db.query(StoryboardShot)
-        .filter(StoryboardShot.project_id == project_id)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
         .order_by(StoryboardShot.sequence.asc())
         .all()
     )
@@ -736,7 +744,7 @@ def _safe_name(name: str) -> str:
 def project_voice_summary(db: Session, project_id: str) -> dict[str, Any]:
     shots = (
         db.query(StoryboardShot)
-        .filter(StoryboardShot.project_id == project_id)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
         .order_by(StoryboardShot.sequence.asc())
         .all()
     )
@@ -794,7 +802,7 @@ def prepare_shot_list_for_batch(
     regenerate_stale: bool,
 ) -> list[StoryboardShot]:
     """批量生成前筛选分镜。"""
-    query = db.query(StoryboardShot).filter(StoryboardShot.project_id == project_id)
+    query = db.query(StoryboardShot).filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
     if shot_ids:
         query = query.filter(StoryboardShot.id.in_(shot_ids))
     shots = query.order_by(StoryboardShot.sequence.asc()).all()

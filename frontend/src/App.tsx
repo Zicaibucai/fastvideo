@@ -1,20 +1,54 @@
+import { lazy, Suspense, Component } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Spin } from 'antd'
 import { AuthProvider, useAuth } from './stores/auth'
 import AppLayout from './components/AppLayout'
 import Login from './pages/Login'
-import Home from './pages/Home'
-import Projects from './pages/Projects'
-import ProjectDetail from './pages/ProjectDetail'
-import Storyboard from './pages/Storyboard'
-import Assets from './pages/Assets'
-import Video from './pages/Video'
-import DocumentReader from './pages/DocumentReader'
-import Facts from './pages/Facts'
-import RenderWorkspace from './pages/RenderWorkspace'
-import VoiceWorkspace from './pages/VoiceWorkspace'
-import VoiceTemplates from './pages/VoiceTemplates'
-import AiVideo from './pages/AiVideo'
+
+const Home = lazy(() => import('./pages/Home'))
+const Projects = lazy(() => import('./pages/Projects'))
+const ProjectDetail = lazy(() => import('./pages/ProjectDetail'))
+const Storyboard = lazy(() => import('./pages/Storyboard'))
+const Assets = lazy(() => import('./pages/Assets'))
+const Video = lazy(() => import('./pages/Video'))
+const DocumentReader = lazy(() => import('./pages/DocumentReader'))
+const Facts = lazy(() => import('./pages/Facts'))
+const RenderWorkspace = lazy(() => import('./pages/RenderWorkspace'))
+const VoiceWorkspace = lazy(() => import('./pages/VoiceWorkspace'))
+const VoiceTemplates = lazy(() => import('./pages/VoiceTemplates'))
+const AiVideo = lazy(() => import('./pages/AiVideo'))
+const VideoTemplateCreator = lazy(() => import('./pages/VideoTemplateCreator'))
+const ConstructionWorkbenchPage = lazy(() => import('./pages/ConstructionWorkbenchPage'))
+const AccountSettings = lazy(() => import('./pages/AccountSettings'))
+
+function PageFallback() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '50vh' }}>
+      <Spin size="large" />
+    </div>
+  )
+}
+
+class ErrorBoundary extends Component<React.PropsWithChildren, { hasError: boolean }> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          页面加载失败，请刷新后重试。
+          <br />
+          <button type="button" onClick={() => window.location.reload()}>刷新页面</button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
   const { user, loading } = useAuth()
@@ -31,9 +65,11 @@ function RequireAuth({ children }: { children: React.ReactElement }) {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <Routes>
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Suspense fallback={<PageFallback />}>
+            <Routes>
           <Route path="/login" element={<Login />} />
           <Route
             element={
@@ -44,6 +80,7 @@ export default function App() {
           >
             <Route path="/" element={<Home />} />
             <Route path="/projects" element={<Projects />} />
+            <Route path="/account-settings" element={<AccountSettings />} />
             <Route path="/project/:projectId" element={<ProjectDetail />} />
             <Route path="/project/:projectId/reader" element={<DocumentReader />} />
             <Route path="/project/:projectId/facts" element={<Facts />} />
@@ -53,11 +90,15 @@ export default function App() {
             <Route path="/project/:projectId/storyboard" element={<Storyboard />} />
             <Route path="/project/:projectId/assets" element={<Assets />} />
             <Route path="/project/:projectId/ai-video" element={<AiVideo />} />
+            <Route path="/project/:projectId/ai-video/advanced" element={<ConstructionWorkbenchPage />} />
+            <Route path="/project/:projectId/ai-video/templates/new" element={<VideoTemplateCreator />} />
             <Route path="/project/:projectId/video" element={<Video />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   )
 }

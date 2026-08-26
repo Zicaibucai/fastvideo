@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import settings
@@ -20,6 +20,15 @@ else:
     )
 
 engine = create_engine(settings.sqlalchemy_url, **_engine_kwargs)
+
+# SQLite 默认不执行外键约束，容易把分镜删除后遗留成悬空的视频位置。
+# 每个连接都开启约束，保证 SET NULL/CASCADE 与 PostgreSQL 行为一致。
+if settings.is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 SessionLocal = sessionmaker(
     bind=engine,

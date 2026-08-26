@@ -7,15 +7,18 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.logging import get_logger
 from app.models.render_task import RenderTask
 
 logger = get_logger(__name__)
+_local_long_task_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fastvideo-local-task")
 
 
 def create_render_task(
@@ -110,13 +113,71 @@ def dispatch(
             logger.warning("celery_unavailable_fallback_sync", error=str(exc))
             _run_sync_fallback(db, task, sync_func)
     else:
-        _run_sync_fallback(db, task, sync_func)
+        # 本地开发通常没有 Redis/Celery。文档解析和整篇解说词都可能运行数分钟，
+        # 不能在 FastAPI 请求线程里同步执行，否则前端会等到 300 秒后报 timeout。
+        use_local_background = task.task_type == "parse_document" or (
+            task.task_type == "gen_narration"
+            and not (task.params or {}).get("regenerate_shot_id")
+            and settings.ai_llm_provider not in {"disabled", "mock"}
+        )
+        if use_local_background:
+            # Long-document evidence extraction can run for several minutes.
+            # Keep the HTTP request responsive when Redis/Celery is disabled.
+            _local_long_task_executor.submit(_run_local_background, task.id, sync_func)
+            logger.info("task_dispatched_local_background", task_id=task.id)
+        else:
+            _run_sync_fallback(db, task, sync_func)
     return task
+
+
+def _run_local_background(task_id: str, sync_func: Callable) -> None:
+    db = SessionLocal()
+    try:
+        task = db.get(RenderTask, task_id)
+        if not task:
+            logger.error("local_background_task_missing", task_id=task_id)
+            return
+        _run_sync_fallback(db, task, sync_func)
+    finally:
+        db.close()
+
+
+def recover_local_narration_tasks() -> int:
+    """Restart local DeepSeek narration jobs left unfinished by a process restart."""
+    if settings.use_celery or settings.ai_llm_provider in {"disabled", "mock"}:
+        return 0
+
+    from app.tasks.narration import gen_narration_sync
+
+    db = SessionLocal()
+    try:
+        tasks = (
+            db.query(RenderTask)
+            .filter(
+                RenderTask.task_type == "gen_narration",
+                RenderTask.status.in_(["queued", "running", "retry"]),
+            )
+            .order_by(RenderTask.created_at.asc())
+            .all()
+        )
+        for task in tasks:
+            _local_long_task_executor.submit(_run_local_background, task.id, gen_narration_sync)
+        if tasks:
+            logger.info("local_narration_tasks_recovered", count=len(tasks))
+        return len(tasks)
+    finally:
+        db.close()
 
 
 def _run_sync_fallback(db: Session, task: RenderTask, sync_func: Callable) -> None:
     """同步降级执行（不阻塞请求太久的前提下）。"""
     try:
+        from app.services.ai_configuration import refresh_runtime_config_from_db
+
+        refresh_runtime_config_from_db()
+        task.status = "running"
+        task.attempts += 1
+        db.commit()
         result = sync_func(task.params or {})
         db.refresh(task)
         task.status = "success"

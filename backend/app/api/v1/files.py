@@ -1,34 +1,69 @@
-"""本地存储文件服务路由（仅 local 后端使用）。"""
+"""受保护的文件存储服务路由（本地存储与 MinIO 均适用）。
+
+所有文件访问均需登录：Bearer API 客户端使用 Authorization 头，浏览器使用
+HttpOnly Cookie；不接受把 JWT 放入文件 URL 查询参数。
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
-from fastapi.responses import Response
+import mimetypes
+import posixpath
 
-from app.core.storage import LocalStorage, storage
+from fastapi import APIRouter, Depends, HTTPException
+from starlette.background import BackgroundTask
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_optional_user
+from app.core.database import get_db
+from app.core.storage import StorageError, storage
+from app.models.project import Project
+from app.models.asset import Asset
+from app.models.user import User
 
 router = APIRouter(prefix="/files", tags=["文件"])
 
 
-@router.get("/{key:path}", summary="读取存储文件")
-def get_file(key: str) -> Response:
-    data = storage.load(key)
-    if data is None:
-        from fastapi import HTTPException
+@router.get("/{key:path}", summary="读取存储文件（需登录）")
+def get_file(
+    key: str,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    if user is None:
+        raise HTTPException(401, "未登录或登录已过期")
 
+    # Project-owned files follow projects/{project_id}/... . Authentication
+    # alone is not sufficient; enforce tenant ownership before reading storage.
+    normalized_key = posixpath.normpath(key.replace("\\", "/")).lstrip("/")
+    if normalized_key in ("", ".") or normalized_key == ".." or normalized_key.startswith("../"):
         raise HTTPException(404, "文件不存在")
-    # 简单 MIME 判断
-    content_type = "application/octet-stream"
-    if key.endswith(".png"):
-        content_type = "image/png"
-    elif key.endswith(".jpg") or key.endswith(".jpeg"):
-        content_type = "image/jpeg"
-    elif key.endswith(".mp4"):
-        content_type = "video/mp4"
-    elif key.endswith(".mp3"):
-        content_type = "audio/mpeg"
-    elif key.endswith(".pdf"):
-        content_type = "application/pdf"
-    elif key.endswith(".svg"):
-        content_type = "image/svg+xml"
-    return Response(content=data, media_type=content_type)
+    parts = normalized_key.split("/")
+    if len(parts) >= 2 and parts[0] == "projects":
+        project = db.get(Project, parts[1])
+        if project is None or project.owner_id != user.id:
+            raise HTTPException(404, "文件不存在")
+    elif normalized_key.startswith("voice/"):
+        # Voice previews historically used a global key prefix; resolve the
+        # owning Asset before serving so another tenant cannot guess the key.
+        asset = db.query(Asset).filter(Asset.file_key == normalized_key).first()
+        project = db.get(Project, asset.project_id) if asset and asset.project_id else None
+        if not asset or (project and project.owner_id != user.id) or (asset.project_id and not project):
+            raise HTTPException(404, "文件不存在")
+    else:
+        # New storage namespaces must opt in with an explicit ownership rule;
+        # authentication alone is never enough to expose a future prefix.
+        raise HTTPException(404, "文件不存在")
+
+    try:
+        local_path = storage.local_path(normalized_key)
+    except StorageError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    content_type = mimetypes.guess_type(key)[0] or "application/octet-stream"
+    # MinIO downloads to a temporary local file; release it after Starlette
+    # finishes streaming the response. LocalStorage treats this as a no-op.
+    return FileResponse(
+        local_path,
+        media_type=content_type,
+        background=BackgroundTask(storage.release_local_path, local_path),
+    )

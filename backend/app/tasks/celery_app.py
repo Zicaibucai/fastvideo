@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.signals import task_prerun
 
 from app.core.config import settings
 
@@ -45,3 +46,11 @@ celery_app.conf.update(
     task_soft_time_limit=3300,
     result_expires=3600 * 24 * 7,
 )
+
+
+@task_prerun.connect
+def refresh_ai_configuration_before_task(*args, **kwargs) -> None:
+    """Keep worker-side adapters aligned with the admin settings row."""
+    from app.services.ai_configuration import refresh_runtime_config_from_db
+
+    refresh_runtime_config_from_db()

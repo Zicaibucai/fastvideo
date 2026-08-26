@@ -23,6 +23,7 @@ import type {
   SourceImage,
   StoryboardShot,
   StoryboardSummary,
+  NarrationBeat,
   SubtitleSegment,
   TocItem,
   User,
@@ -42,9 +43,39 @@ import type {
 export const authApi = {
   login: (email: string, password: string) =>
     api.post<{ access_token: string; token_type: string }>('/auth/login', { email, password }),
+  logout: () => api.post('/auth/logout'),
   register: (payload: { email: string; username: string; password: string; company?: string }) =>
     api.post<User>('/auth/register', payload),
   me: () => api.get<User>('/auth/me'),
+  updateMe: (payload: { username?: string; full_name?: string; company?: string; password?: string }) =>
+    api.patch<User>('/auth/me', payload),
+  aiConfiguration: () => api.get<import('./types').AIConfiguration>('/settings/ai'),
+  saveAiConfiguration: (payload: { providers: Record<string, any>; stages: Record<string, any> }) =>
+    api.put<import('./types').AIConfiguration>('/settings/ai', payload),
+}
+
+// ---------- Admin 人员系统 ----------
+export const adminApi = {
+  users: () => api.get<User[]>('/admin/users'),
+  createUser: (payload: {
+    email: string
+    username: string
+    password: string
+    full_name?: string
+    company?: string
+    is_superuser?: boolean
+  }) => api.post<User>('/admin/users', payload),
+  updateUser: (
+    id: string,
+    payload: {
+      username?: string
+      full_name?: string | null
+      company?: string | null
+      password?: string
+      is_active?: boolean
+      is_superuser?: boolean
+    },
+  ) => api.patch<User>(`/admin/users/${id}`, payload),
 }
 
 // ---------- 系统 ----------
@@ -55,12 +86,19 @@ export const systemApi = {
 
 // ---------- 项目 ----------
 export const projectApi = {
-  list: (params?: { page?: number; page_size?: number; status?: string }) =>
+  list: (params?: {
+    page?: number
+    page_size?: number
+    status?: string
+    sort_by?: 'last_entered_at' | 'created_at' | 'name'
+    sort_order?: 'asc' | 'desc'
+  }) =>
     api.get<Page<Project>>('/projects', { params }),
   create: (payload: { name: string; code?: string; description?: string }) =>
     api.post<Project>('/projects', payload),
   detail: (id: string) => api.get<Project>(`/projects/${id}`),
-  update: (id: string, payload: Partial<Project>) => api.patch<Project>(`/projects/${id}`, payload),
+  enter: (id: string) => api.post<Project>(`/projects/${id}/enter`),
+  update: (id: string, payload: Record<string, unknown>) => api.patch<Project>(`/projects/${id}`, payload),
   remove: (id: string) => api.delete(`/projects/${id}`),
 }
 
@@ -78,11 +116,17 @@ export const documentApi = {
     api.post<ResumableUpload>(`/projects/${projectId}/documents/uploads`, payload),
   resumableUploadStatus: (projectId: string, uploadId: string) =>
     api.get<ResumableUpload>(`/projects/${projectId}/documents/uploads/${uploadId}`),
-  uploadChunk: (projectId: string, uploadId: string, index: number, chunk: Blob) =>
+  uploadChunk: (projectId: string, uploadId: string, index: number, chunk: Blob, sha256?: string) =>
     api.put<ResumableUpload>(
       `/projects/${projectId}/documents/uploads/${uploadId}/chunks/${index}`,
       chunk,
-      { headers: { 'Content-Type': 'application/octet-stream' }, timeout: 180000 },
+      {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          ...(sha256 ? { 'X-Chunk-SHA256': sha256 } : {}),
+        },
+        timeout: 180000,
+      },
     ),
   completeResumableUpload: (projectId: string, uploadId: string) =>
     api.post<SourceDocument>(`/projects/${projectId}/documents/uploads/${uploadId}/complete`),
@@ -120,7 +164,8 @@ export const factApi = {
     api.get<ExtractedFact[]>(`/projects/${projectId}/facts`, { params }),
   conflicts: (projectId: string) =>
     api.get<ExtractedFact[]>(`/projects/${projectId}/facts/conflicts`),
-  types: () => api.get<Record<string, string>>('/facts/types').catch(() => ({ data: {} })),
+  types: (projectId: string) =>
+    api.get<Record<string, string>>(`/projects/${projectId}/facts/types`).catch(() => ({ data: {} })),
   confirm: (projectId: string, factId: string, payload: { status: string; fact_value?: string; unit?: string; note?: string }) =>
     api.post<{ id: string; status: string; message: string }>(`/projects/${projectId}/facts/${factId}/confirm`, payload),
 }
@@ -138,7 +183,7 @@ export const storyboardApi = {
     api.get<StoryboardShot[]>(`/projects/${projectId}/storyboard`),
   summary: (projectId: string) =>
     api.get<StoryboardSummary>(`/projects/${projectId}/storyboard/summary`),
-  create: (projectId: string, payload: Partial<StoryboardShot>) =>
+  create: (projectId: string, payload: Partial<StoryboardShot> & { insert_at?: number }) =>
     api.post<StoryboardShot>(`/projects/${projectId}/storyboard`, {
       project_id: projectId,
       ...payload,
@@ -147,12 +192,23 @@ export const storyboardApi = {
     projectId: string,
     payload: {
       section_count: number
+      target_shot_count?: number
       tone: string
       target_duration_seconds?: number
       video_purpose?: string
       focus_scoring_points?: string[]
       include_company_intro?: boolean
       include_construction_simulation?: boolean
+      chars_per_minute?: number
+      generation_mode?: 'multi_stage' | 'single_pass'
+      custom_requirements?: string
+      predefined_outline?: string
+      target_beat_count?: number
+      evidence_batch_chars?: number
+      evidence_concurrency?: number
+      evidence_auto_approve?: boolean
+      evidence_run_id?: string
+      strict_fact_mode?: boolean
     },
   ) =>
     api.post<{ task_id: string }>(`/projects/${projectId}/storyboard/generate`, {
@@ -172,49 +228,46 @@ export const storyboardApi = {
     }),
   remove: (projectId: string, shotId: string) =>
     api.delete(`/projects/${projectId}/storyboard/${shotId}`),
+  beats: (projectId: string) =>
+    api.get<NarrationBeat[]>(`/projects/${projectId}/storyboard/beats`),
+  updateDocument: (projectId: string, shots: { shot_id: string; narration: string }[]) =>
+    api.patch<{ updated_count: number; beat_count: number }>(`/projects/${projectId}/storyboard/document`, { shots }),
+  resegment: (
+    projectId: string,
+    payload: { target_shot_count: number; chars_per_minute?: number; instructions?: string },
+  ) => api.post<{ task_id: string; status: string }>(`/projects/${projectId}/storyboard/resegment`, payload),
+  evidenceRun: (projectId: string, runId: string) =>
+    api.get<Record<string, any>>(`/projects/${projectId}/storyboard/evidence/runs/${runId}`),
+  approveEvidence: (projectId: string, runId: string, evidenceIds?: string[], continueGeneration = false) =>
+    api.post<{ run_id: string; approved_count: number; status: string; task_id?: string }>(
+      `/projects/${projectId}/storyboard/evidence/runs/${runId}/approve`,
+      { ...(evidenceIds ? { evidence_ids: evidenceIds } : {}), continue_generation: continueGeneration },
+    ),
 }
 
 // ---------- 素材 ----------
 export const assetApi = {
-  list: (projectId: string, assetType?: string) =>
-    api.get<Asset[]>(`/projects/${projectId}/assets`, { params: { asset_type: assetType } }),
+  list: (projectId: string, assetType?: string, source?: string) =>
+    api.get<Asset[]>(`/projects/${projectId}/assets`, { params: { asset_type: assetType, source } }),
   upload: (projectId: string, file: File, name?: string) => {
     const form = new FormData()
     form.append('file', file)
     if (name) form.append('name', name)
     return api.post<Asset>(`/projects/${projectId}/assets`, form)
   },
-  aiImage: (projectId: string, shotId: string, prompt?: string) => {
-    const form = new FormData()
-    form.append('shot_id', shotId)
-    if (prompt) form.append('prompt', prompt)
-    return api.post<{ task_id: string }>(`/projects/${projectId}/assets/ai-image`, form)
-  },
-  aiTts: (projectId: string, shotId: string, voiceName: string, speed: number) => {
-    const form = new FormData()
-    form.append('shot_id', shotId)
-    form.append('voice_name', voiceName)
-    form.append('speed', String(speed))
-    return api.post<{ task_id: string }>(`/projects/${projectId}/assets/ai-tts`, form)
-  },
-  aiVideo: (projectId: string, shotId: string, prompt?: string, duration = 5) => {
-    const form = new FormData()
-    form.append('shot_id', shotId)
-    if (prompt) form.append('prompt', prompt)
-    form.append('duration', String(duration))
-    return api.post<{ task_id: string }>(`/projects/${projectId}/assets/ai-video`, form)
-  },
+  update: (projectId: string, assetId: string, payload: { name?: string; tags?: string[]; meta?: Record<string, any> }) =>
+    api.patch<Asset>(`/projects/${projectId}/assets/${assetId}`, payload),
   remove: (projectId: string, assetId: string) =>
     api.delete(`/projects/${projectId}/assets/${assetId}`),
 }
 
 // ---------- 任务 ----------
 export const taskApi = {
-  list: (params?: { project_id?: string; status?: string }) =>
+  list: (params?: { project_id?: string; status?: string; task_type?: string }) =>
     api.get<RenderTask[]>('/tasks', { params }),
   detail: (id: string) => api.get<RenderTask>(`/tasks/${id}`),
-  retry: (id: string) => api.post<RenderTask>(`/tasks/${id}/retry`, {}),
-  cancel: (id: string) => api.post<RenderTask>(`/tasks/${id}/cancel`, {}),
+  retry: (id: string) => api.post<RenderTask>(`/tasks/${id}/retry`, { task_id: id }),
+  cancel: (id: string) => api.post<RenderTask>(`/tasks/${id}/cancel`, { task_id: id }),
 }
 
 // ---------- 配音模板 ----------
@@ -309,14 +362,13 @@ export const pronunciationApi = {
 
 // ---------- 配音文件下载（带认证） ----------
 export async function downloadVoiceFile(projectId: string, kind: 'wav' | 'mp3' | 'srt', shotId?: string) {
-  const token = localStorage.getItem('fastvideo_token')
   let url = `/api/v1/projects/${projectId}/voice/export/${kind}`
   let filename = `项目配音_${kind}.${kind === 'srt' ? 'srt' : 'zip'}`
   if (shotId) {
     url = `/api/v1/projects/${projectId}/storyboard/${shotId}/subtitles/export`
     filename = `shot_${shotId.slice(0, 8)}.srt`
   }
-  const resp = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  const resp = await fetch(url, { credentials: 'include' })
   if (!resp.ok) throw new Error('下载失败')
   const blob = await resp.blob()
   const link = document.createElement('a')
@@ -356,6 +408,8 @@ export const videoApi = {
     api.post(`/video-projects/${id}/segments/${segId}/render`),
   previewSegment: (id: string, segId: string) =>
     api.post(`/video-projects/${id}/segments/${segId}/preview`),
+  downloadSegment: (id: string, segId: string) =>
+    `/api/v1/video-projects/${id}/segments/${segId}/download`,
   retrySegment: (id: string, segId: string) =>
     api.post(`/video-projects/${id}/segments/${segId}/retry`),
   renderAllSegments: (id: string) =>
@@ -380,14 +434,25 @@ export const exportApi = {
 
 // ---------- 视频文件下载（带认证） ----------
 export async function downloadVideoFile(kind: 'mp4' | 'srt' | 'report', exportId: string) {
-  const token = localStorage.getItem('fastvideo_token')
   const url = `/api/v1/exports/${exportId}/${kind === 'mp4' ? 'download' : kind}`
-  const resp = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  const resp = await fetch(url, { credentials: 'include' })
   if (!resp.ok) throw new Error('下载失败')
   const blob = await resp.blob()
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
   link.download = `export_${exportId.slice(0, 8)}.${kind === 'report' ? 'json' : kind}`
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
+export async function downloadVideoSegment(videoProjectId: string, segmentId: string, sequence: number) {
+  const url = videoApi.downloadSegment(videoProjectId, segmentId)
+  const resp = await fetch(url, { credentials: 'include' })
+  if (!resp.ok) throw new Error('下载分段失败')
+  const blob = await resp.blob()
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `segment_${sequence}.mp4`
   link.click()
   URL.revokeObjectURL(link.href)
 }
@@ -412,21 +477,20 @@ export const renderApi = {
   uploadSourceImage: (
     projectId: string,
     file: File,
-    meta: { name: string; source_software?: string; camera_angle?: string; storyboard_shot_id?: string },
+    meta: { name: string; source_software?: string; camera_angle?: string },
   ) => {
     const form = new FormData()
     form.append('file', file)
     form.append('name', meta.name)
     form.append('source_software', meta.source_software || 'Revit')
     form.append('camera_angle', meta.camera_angle || '建筑人视')
-    if (meta.storyboard_shot_id) form.append('storyboard_shot_id', meta.storyboard_shot_id)
     return api.post<SourceImage>(`/projects/${projectId}/render/source-images`, form)
   },
   listSourceImages: (projectId: string) =>
     api.get<SourceImage[]>(`/projects/${projectId}/render/source-images`),
   createTask: (projectId: string, payload: Record<string, any>) =>
     api.post<RenderJobTask>(`/projects/${projectId}/render/tasks`, payload),
-  listTasks: (projectId: string, params?: { status?: string; shot_id?: string }) =>
+  listTasks: (projectId: string, params?: { status?: string }) =>
     api.get<RenderJobTask[]>(`/projects/${projectId}/render/tasks`, { params }),
   getTask: (projectId: string, taskId: string) =>
     api.get<RenderJobTask>(`/projects/${projectId}/render/tasks/${taskId}`),
@@ -436,7 +500,7 @@ export const renderApi = {
     api.post<RenderJobTask>(`/projects/${projectId}/render/tasks/${taskId}/cancel`),
   taskResults: (projectId: string, taskId: string) =>
     api.get<RenderVersion[]>(`/projects/${projectId}/render/tasks/${taskId}/results`),
-  listVersions: (projectId: string, params?: { source_asset_id?: string; shot_id?: string }) =>
+  listVersions: (projectId: string, params?: { source_asset_id?: string }) =>
     api.get<RenderVersion[]>(`/projects/${projectId}/render/versions`, { params }),
   getVersion: (projectId: string, versionId: string) =>
     api.get<RenderVersion>(`/projects/${projectId}/render/versions/${versionId}`),
@@ -458,26 +522,12 @@ export const renderApi = {
     api.post<RenderJobTask>(`/projects/${projectId}/render/upscale`, payload),
 }
 
-// ---------- 分镜画面绑定 ----------
-export const shotVisualApi = {
-  select: (projectId: string, shotId: string, versionId: string) =>
-    api.post<Record<string, any>>(`/projects/${projectId}/storyboard/${shotId}/visual/select`, {
-      version_id: versionId,
-    }),
-  history: (projectId: string, shotId: string) =>
-    api.get<Record<string, any>>(`/projects/${projectId}/storyboard/${shotId}/visual/history`),
-  restore: (projectId: string, shotId: string, versionId: string) =>
-    api.post<Record<string, any>>(`/projects/${projectId}/storyboard/${shotId}/visual/restore`, {
-      version_id: versionId,
-    }),
-}
-
-// ---------- AI 视频生成（Phase 7：Seedance 图片驱动视频分镜） ----------
+// ---------- AI 视频生成（Phase 7：Seedance 图片驱动视频素材） ----------
 export const videoGenApi = {
   // 模板
-  templates: (projectId: string, mode?: string) =>
+  templates: (projectId: string, mode?: string, scope?: 'all' | 'personal' | 'organization') =>
     api.get<VideoGenerationTemplate[]>(`/projects/${projectId}/ai-video/templates`, {
-      params: mode ? { mode } : {},
+      params: { ...(mode ? { mode } : {}), ...(scope ? { scope } : {}) },
     }),
   createTemplate: (projectId: string, payload: Partial<VideoGenerationTemplate>) =>
     api.post<VideoGenerationTemplate>(`/projects/${projectId}/ai-video/templates`, payload),
@@ -493,65 +543,139 @@ export const videoGenApi = {
     api.get<Record<string, boolean>>(`/projects/${projectId}/ai-video/providers/${provider}/capabilities`),
   referenceImages: (projectId: string) =>
     api.get<ReferenceImage[]>(`/projects/${projectId}/ai-video/reference-images`),
-  constraintCheck: (projectId: string, text: string) =>
+  constraintCheck: (projectId: string, text: string, prompt_recipe?: Record<string, any> | null) =>
     api.post<{ conflicts: string[]; blocked: boolean }>(
       `/projects/${projectId}/ai-video/constraint-check`,
-      { text },
+      { text, prompt_recipe: prompt_recipe || undefined },
     ),
+  compilePrompt: (projectId: string, payload: {
+    positive_prompt: string
+    negative_prompt?: string | null
+    prompt_recipe?: Record<string, any> | null
+    template_id?: string | null
+    constraints_enabled?: boolean
+    resolution?: string | null
+  }) =>
+    api.post<{
+      positive_prompt: string
+      negative_prompt: string
+      provider_prompt: string
+      provider_prompt_chars: number
+      provider_prompt_limit: number
+      prompt_recipe?: Record<string, any> | null
+      conflicts: string[]
+      blocked: boolean
+    }>(`/projects/${projectId}/ai-video/compile-prompt`, payload),
 
   // 提示词大师：读参考帧生成视频提示词
   promptMaster: (
     projectId: string,
     payload: {
       first_frame_asset_id?: string | null
+      middle_frame_asset_id?: string | null
       last_frame_asset_id?: string | null
       reference_asset_ids?: string[]
       template_id?: string | null
       intent?: string | null
-      generation_mode: 'image_to_video' | 'first_last_frame_video'
+      generation_mode: 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
     },
   ) =>
-    api.post<{ prompt: string; negative_prompt?: string; mode: string; is_mock: boolean }>(
+    api.post<{ prompt: string; name?: string; description?: string; negative_prompt?: string; mode: string; is_mock: boolean; provider?: string; model?: string; vision_used?: boolean; warnings?: string[]; recommended_duration?: number; recipe?: Record<string, any> }>(
       `/projects/${projectId}/ai-video/prompt-master`,
       payload,
     ),
 
+  // 从专业视频创建可复用模板
+  createTemplateDraft: (projectId: string, payload: {
+    source_video_asset_id: string
+    name: string
+    description?: string
+    /** 历史兼容字段，当前创建流程不再要求确认使用权。 */
+    source_license_confirmed?: boolean
+  }) => api.post<import('./types').VideoTemplateDraft>(`/projects/${projectId}/ai-video/template-drafts`, payload),
+  listTemplateDrafts: (projectId: string) =>
+    api.get<import('./types').VideoTemplateDraft[]>(`/projects/${projectId}/ai-video/template-drafts`),
+  getTemplateDraft: (projectId: string, draftId: string) =>
+    api.get<import('./types').VideoTemplateDraft>(`/projects/${projectId}/ai-video/template-drafts/${draftId}`),
+  clipTemplateDraft: (projectId: string, draftId: string, payload: {
+    clip_start_seconds: number
+    clip_end_seconds: number
+    middle_seconds?: number | number[]
+  }) => api.post<import('./types').VideoTemplateDraft>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/clip`, payload),
+  analyzeTemplateDraft: (
+    projectId: string,
+    draftId: string,
+    intent?: string,
+    generationMode: 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video' = 'image_to_video',
+  ) =>
+    api.post<import('./types').VideoTemplateDraft>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/analyze`, {
+      intent,
+      generation_mode: generationMode,
+    }),
+  updateTemplateDraftRecipe: (projectId: string, draftId: string, payload: { name?: string; description?: string; prompt_recipe: Record<string, any> }) =>
+    api.patch<import('./types').VideoTemplateDraft>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/recipe`, payload),
+  previewTemplateDraft: (projectId: string, draftId: string, payload?: { provider?: string; model_name?: string; duration?: number; aspect_ratio?: string; resolution?: string; structure_conflict_confirmed?: boolean }) =>
+    api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/preview`, payload || {}),
+  publishTemplateDraft: (projectId: string, draftId: string, payload: { name?: string; description?: string; category?: string; tags?: string[]; scope?: string }) =>
+    api.post<VideoGenerationTemplate>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/publish`, payload),
+
   // 任务
   createTask: (projectId: string, payload: Record<string, any>) =>
     api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/tasks`, payload),
-  listTasks: (projectId: string, params?: { status?: string; shot_id?: string }) =>
+  listTasks: (projectId: string, params?: { status?: string }) =>
     api.get<VideoGenerationJob[]>(`/projects/${projectId}/ai-video/tasks`, { params }),
   getTask: (projectId: string, jobId: string) =>
     api.get<VideoGenerationJob>(`/projects/${projectId}/ai-video/tasks/${jobId}`),
   retryTask: (projectId: string, jobId: string) =>
     api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/tasks/${jobId}/retry`),
+  regenerateTask: (projectId: string, jobId: string) =>
+    api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/tasks/${jobId}/regenerate`),
   cancelTask: (projectId: string, jobId: string) =>
     api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/tasks/${jobId}/cancel`),
 
   // 版本
   taskVersions: (projectId: string, jobId: string) =>
     api.get<VideoGenerationVersion[]>(`/projects/${projectId}/ai-video/tasks/${jobId}/versions`),
-  versions: (projectId: string, params?: { shot_id?: string }) =>
-    api.get<VideoGenerationVersion[]>(`/projects/${projectId}/ai-video/versions`, { params }),
+  versions: (projectId: string) =>
+    api.get<VideoGenerationVersion[]>(`/projects/${projectId}/ai-video/versions`),
+  renameVersion: (projectId: string, versionId: string, name: string) =>
+    api.patch<VideoGenerationVersion>(`/projects/${projectId}/ai-video/versions/${versionId}`, { name }),
   selectVersion: (projectId: string, versionId: string) =>
     api.post<VideoGenerationVersion>(`/projects/${projectId}/ai-video/versions/${versionId}/select`, {}),
-  bindVersion: (projectId: string, versionId: string, shotId: string) =>
-    api.post<Record<string, any>>(`/projects/${projectId}/ai-video/versions/${versionId}/bind`, {
-      shot_id: shotId,
-    }),
   deleteVersion: (projectId: string, versionId: string) =>
     api.delete(`/projects/${projectId}/ai-video/versions/${versionId}`),
 }
 
 // AI 视频下载（文件服务挂载在 /files，无需 /api/v1 前缀）
-export async function downloadAiVideo(resultUrl: string) {
-  const token = localStorage.getItem('fastvideo_token')
-  const resp = await fetch(resultUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+function safeDownloadName(name: string, fallback: string) {
+  const clean = name.trim().replace(/[\\/:*?"<>|]+/g, '_')
+  return clean || fallback
+}
+
+async function downloadProtectedFile(resultUrl: string, filename: string) {
+  const resp = await fetch(resultUrl, { credentials: 'include' })
   if (!resp.ok) throw new Error('下载失败')
   const blob = await resp.blob()
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = `ai_video_${Date.now()}.mp4`
+  link.download = filename
   link.click()
   URL.revokeObjectURL(link.href)
+}
+
+export async function downloadAiVideo(resultUrl: string, filename?: string) {
+  await downloadProtectedFile(
+    resultUrl,
+    safeDownloadName(filename || `ai_video_${Date.now()}.mp4`, `ai_video_${Date.now()}.mp4`),
+  )
+}
+
+export async function downloadAssetFile(asset: Pick<Asset, 'file_key' | 'url' | 'name' | 'mime_type'>) {
+  const resultUrl = asset.file_key ? `/files/${asset.file_key}` : asset.url || ''
+  if (!resultUrl) throw new Error('素材没有可下载文件')
+  const sourceKey = (asset.file_key || asset.url || '').split('?')[0]
+  const extension = sourceKey.match(/\.[a-z0-9]{2,8}$/i)?.[0] || ''
+  const baseName = safeDownloadName(asset.name, '素材')
+  const filename = /\.[a-z0-9]{2,8}$/i.test(baseName) ? baseName : `${baseName}${extension}`
+  await downloadProtectedFile(resultUrl, filename)
 }

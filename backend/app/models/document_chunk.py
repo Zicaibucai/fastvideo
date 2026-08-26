@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -17,6 +17,7 @@ class DocumentChunk(BaseModel):
     document_id: Mapped[str] = mapped_column(
         ForeignKey("source_documents.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    sequence: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
     page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     heading_path: Mapped[str | None] = mapped_column(String(512), nullable=True)  # "1 > 1.1 > 施工部署"
@@ -27,3 +28,7 @@ class DocumentChunk(BaseModel):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     document = relationship("SourceDocument", back_populates="chunks")
+
+    __table_args__ = (
+        Index("ix_document_chunks_document_sequence", "document_id", "sequence"),
+    )

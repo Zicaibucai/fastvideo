@@ -19,7 +19,7 @@ class AssetCreate(BaseModel):
 
 
 class AssetUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     tags: list[str] | None = None
     meta: dict | None = None
 
@@ -39,3 +39,5 @@ class AssetOut(TimestampedModel):
     generated_by: str | None
     prompt: str | None
     tags: list | None
+    meta: dict | None
+    project_stage: str | None

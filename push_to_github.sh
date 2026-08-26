@@ -11,7 +11,7 @@
 
 set -e
 
-GITHUB_USER="apple"        # ←← 改成你的 GitHub 用户名
+GITHUB_USER="Zicaibucai"  # ←← 改成你的 GitHub 用户名
 REPO_NAME="fastvideo"      # ←← 改成你的仓库名（如果不同）
 
 echo "==> 1/5 清理沙盒残留的 .git（如果有）"

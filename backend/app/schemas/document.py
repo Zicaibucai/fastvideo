@@ -31,6 +31,7 @@ class DocumentPageContent(DocumentPageOut):
 # ---------- DocumentChunk ----------
 class DocumentChunkOut(TimestampedModel):
     document_id: str
+    sequence: int = 0
     page_start: int | None
     page_end: int | None
     heading_path: str | None
@@ -70,10 +71,15 @@ class ExtractedFactOut(TimestampedModel):
     document_id: str | None
     document_name: str | None = None
     page_number: int | None
+    source_order: int | None = None
     location_label: str | None
     fact_type: str
     fact_name: str
+    fact_label: str
     fact_value: str
+    scope: str | None = None
+    category: str | None = None
+    usage_status: str = "review"
     unit: str | None
     source_quote: str | None
     confidence: float

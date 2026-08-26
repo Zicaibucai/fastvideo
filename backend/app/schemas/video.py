@@ -15,7 +15,6 @@ class TimelineItemIn(BaseModel):
     shot_id: str
     sequence: int
     duration: float | None = None
-    visual_motion: str | None = None
     fit_mode: str | None = None
     transition_type: str | None = None
     transition_duration: float | None = None
@@ -73,7 +72,7 @@ class VideoProjectCreate(BaseModel):
     name: str
     width: int = 1920
     height: int = 1080
-    fps: int = 25
+    fps: int = 24
     watermark_text: str | None = None
     brand_color: str = "#1E3A5F"
     export_mode: str = "demo"
@@ -134,8 +133,8 @@ class VideoSegmentOut(TimestampedModel):
     visual_asset_id: str | None
     audio_version_id: str | None
     duration: float
+    time_adaptation: str | None
     is_locked: bool
-    visual_motion: str
     fit_mode: str
     transition_type: str
     transition_duration: float
@@ -153,6 +152,8 @@ class VideoSegmentOut(TimestampedModel):
     shot_title: str | None = None
     narration: str | None = None
     visual_url: str | None = None
+    visual_source_duration: float | None = None
+    visual_playback_speed: float | None = None
     audio_url: str | None = None
     has_visual: bool = False
     has_audio: bool = False
@@ -162,8 +163,8 @@ class VideoSegmentOut(TimestampedModel):
 
 class VideoSegmentPatch(BaseModel):
     duration: float | None = None
+    time_adaptation: str | None = None
     is_locked: bool | None = None
-    visual_motion: str | None = None
     fit_mode: str | None = None
     transition_type: str | None = None
     transition_duration: float | None = None

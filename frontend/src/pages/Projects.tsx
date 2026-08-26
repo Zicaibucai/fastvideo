@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Card,
   Table,
@@ -11,6 +11,7 @@ import {
   Typography,
   App,
   Popconfirm,
+  Select,
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, ArrowRightOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -20,6 +21,8 @@ import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 
+type ProjectSortBy = 'last_entered_at' | 'created_at' | 'name'
+
 export default function Projects() {
   const navigate = useNavigate()
   const { message } = App.useApp()
@@ -28,16 +31,23 @@ export default function Projects() {
   const [modalOpen, setModalOpen] = useState(false)
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const [sortBy, setSortBy] = useState<ProjectSortBy>('last_entered_at')
 
-  const fetchList = () => {
+  const fetchList = useCallback(() => {
     setLoading(true)
     projectApi
-      .list({ page_size: 100 })
+      .list({
+        page_size: 100,
+        sort_by: sortBy,
+        sort_order: sortBy === 'name' ? 'asc' : 'desc',
+      })
       .then((res) => setItems(res.data.items))
       .finally(() => setLoading(false))
-  }
+  }, [sortBy])
 
-  useEffect(fetchList, [])
+  useEffect(() => {
+    fetchList()
+  }, [fetchList])
 
   const handleCreate = () => {
     form.resetFields()
@@ -71,65 +81,67 @@ export default function Projects() {
 
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <div className="page-header">
         <div>
           <Title level={4} style={{ marginBottom: 4 }}>
             投标项目
           </Title>
-          <Text type="secondary">管理招标项目及其全部视频生产流程</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-          新建项目
-        </Button>
+        <Space wrap>
+          <Space size={8}>
+            <Text type="secondary">排序方式</Text>
+            <Select<ProjectSortBy>
+              aria-label="项目排序方式"
+              value={sortBy}
+              onChange={setSortBy}
+              options={[
+                { value: 'last_entered_at', label: '最近进入' },
+                { value: 'created_at', label: '最新创建' },
+                { value: 'name', label: '项目名称' },
+              ]}
+              style={{ width: 122 }}
+            />
+          </Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+            新建项目
+          </Button>
+        </Space>
       </div>
 
       <Card>
         <Table<Project>
           rowKey="id"
+          className="projects-table"
+          tableLayout="fixed"
           loading={loading}
           dataSource={items}
           columns={[
             {
               title: '项目名称',
               dataIndex: 'name',
+              width: 210,
               render: (v, r) => (
-                <Space direction="vertical" size={0}>
+                <Space className="project-name-cell" direction="vertical" size={0}>
                   <b>{v}</b>
                   {r.code && <Text type="secondary" style={{ fontSize: 12 }}>招标编号：{r.code}</Text>}
                 </Space>
               ),
             },
             {
-              title: '建筑面积',
-              dataIndex: 'bid_area',
-              width: 140,
-              render: (v, r) =>
-                v ? (
-                  <span>
-                    {v.toLocaleString()} ㎡
-                    {r.area_source_page && (
-                      <Text type="secondary" style={{ fontSize: 12 }}>（P{r.area_source_page}）</Text>
-                    )}
-                  </span>
-                ) : (
-                  <Text type="secondary">—</Text>
-                ),
-            },
-            {
-              title: '工期',
-              dataIndex: 'construction_period',
-              width: 140,
-              render: (v) => v || <Text type="secondary">—</Text>,
-            },
-            {
               title: '状态',
               dataIndex: 'status',
-              width: 100,
+              width: 75,
               render: (s) => (s === 'active' ? <Tag color="green">进行中</Tag> : <Tag>草稿</Tag>),
             },
-            { title: '资料', dataIndex: 'doc_count', width: 70 },
-            { title: '分镜', dataIndex: 'shot_count', width: 70 },
-            { title: '素材', dataIndex: 'asset_count', width: 70 },
+            {
+              title: '最后进入',
+              dataIndex: 'last_entered_at',
+              width: 140,
+              render: (v) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : <Text type="secondary">未进入</Text>),
+            },
+            { title: '资料', dataIndex: 'doc_count', width: 65 },
+            { title: '分镜', dataIndex: 'shot_count', width: 65 },
+            { title: '素材', dataIndex: 'asset_count', width: 65 },
             {
               title: '创建时间',
               dataIndex: 'created_at',
@@ -138,7 +150,7 @@ export default function Projects() {
             },
             {
               title: '操作',
-              width: 200,
+              width: 185,
               render: (_, r) => (
                 <Space>
                   <Button

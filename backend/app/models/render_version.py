@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -14,6 +14,9 @@ from app.models.base import BaseModel
 
 class RenderVersion(BaseModel):
     __tablename__ = "render_versions"
+    __table_args__ = (
+        UniqueConstraint("render_job_id", "version_number", name="uq_render_versions_job_version"),
+    )
 
     render_job_id: Mapped[str | None] = mapped_column(
         ForeignKey("render_jobs.id", ondelete="CASCADE"), index=True, nullable=True

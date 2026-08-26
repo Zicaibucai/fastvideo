@@ -3,7 +3,7 @@
 三个实体：
 - VideoGenerationTemplate  视频生成模板（全局表，仅供视频生成使用，与图片渲染预设隔离）
 - VideoGenerationJob       视频生成任务（含完整参数快照、约束、Seedance 任务 ID）
-- VideoGenerationVersion   视频结果版本（可预览/下载/选为当前结果/绑定分镜/软删除）
+- VideoGenerationVersion   视频结果版本（可预览/下载/选为当前结果/软删除）
 
 设计原则：
 - 每个生成任务保存完整参数快照（提示词、模板、首帧、尾帧、模型、结果版本），便于复现与切换。
@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -45,13 +45,105 @@ class VideoGenerationTemplate(BaseModel):
     # 企业模板复制自系统模板时记录来源
     source_template_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
+    # 可复用模板配方与样片来源（用户创建模板）
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    prompt_recipe: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    preview_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    cover_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    scope: Mapped[str] = mapped_column(String(16), default="organization", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="published", nullable=False)
+    source_video_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    clip_start_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clip_end_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_frame_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    middle_frame_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    last_frame_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    # 模板制作时保存完整的有序参考帧规则；首/中/尾字段保留用于旧模板兼容和封面展示。
+    reference_frame_asset_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    reference_frame_times: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    reference_frame_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_license_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-class VideoGenerationJob(BaseModel):
-    __tablename__ = "video_generation_jobs"
+    preview_asset = relationship("Asset", foreign_keys=[preview_asset_id], lazy="selectin")
+    cover_asset = relationship("Asset", foreign_keys=[cover_asset_id], lazy="selectin")
+    source_video_asset = relationship("Asset", foreign_keys=[source_video_asset_id], lazy="selectin")
+    first_frame_asset = relationship("Asset", foreign_keys=[first_frame_asset_id], lazy="selectin")
+    middle_frame_asset = relationship("Asset", foreign_keys=[middle_frame_asset_id], lazy="selectin")
+    last_frame_asset = relationship("Asset", foreign_keys=[last_frame_asset_id], lazy="selectin")
+
+
+class VideoTemplateDraft(BaseModel):
+    """从专业视频提炼模板的中间草稿。"""
+
+    __tablename__ = "video_template_drafts"
 
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    source_video_asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="uploaded", nullable=False, index=True)
+    clip_start_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clip_end_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    middle_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    first_frame_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    middle_frame_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    last_frame_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    # 用户在模板创建器中按顺序加入的参考帧（首帧之后最多 8 张）。
+    reference_frame_asset_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    reference_frame_times: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    prompt_recipe: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    analysis_warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    intent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preview_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    preview_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
+    )
+    template_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    source_license_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    project = relationship("Project")
+    source_video_asset = relationship("Asset", foreign_keys=[source_video_asset_id], lazy="selectin")
+    first_frame_asset = relationship("Asset", foreign_keys=[first_frame_asset_id], lazy="selectin")
+    middle_frame_asset = relationship("Asset", foreign_keys=[middle_frame_asset_id], lazy="selectin")
+    last_frame_asset = relationship("Asset", foreign_keys=[last_frame_asset_id], lazy="selectin")
+    preview_asset = relationship("Asset", foreign_keys=[preview_asset_id], lazy="selectin")
+
+
+class VideoGenerationJob(BaseModel):
+    __tablename__ = "video_generation_jobs"
+    __table_args__ = (
+        UniqueConstraint("project_id", "idempotency_key", name="uq_video_jobs_project_idempotency"),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    # 旧版本遗留字段：AI 视频生成结果不与分镜建立绑定契约。
+    # 视频素材只在 VideoSegment.visual_asset_id 中由视频工程选择。
     storyboard_shot_id: Mapped[str | None] = mapped_column(
         ForeignKey("storyboard_shots.id", ondelete="SET NULL"), index=True, nullable=True
     )
@@ -65,6 +157,8 @@ class VideoGenerationJob(BaseModel):
     last_frame_asset_id: Mapped[str | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL"), index=True, nullable=True
     )
+    reference_asset_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    variant_group_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     template_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # 独立视频提示词（不使用 narration/visual_prompt/image_prompt）
@@ -98,7 +192,7 @@ class VideoGenerationJob(BaseModel):
     result_asset_id: Mapped[str | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
     )
-    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
     completed_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -147,6 +241,10 @@ class VideoGenerationJob(BaseModel):
 
 class VideoGenerationVersion(BaseModel):
     __tablename__ = "video_generation_versions"
+    __table_args__ = (
+        UniqueConstraint("video_job_id", "version_number", name="uq_video_versions_job_version"),
+        UniqueConstraint("variant_group_id", "version_number", name="uq_video_versions_variant_version"),
+    )
 
     video_job_id: Mapped[str] = mapped_column(
         ForeignKey("video_generation_jobs.id", ondelete="CASCADE"), index=True, nullable=False
@@ -155,6 +253,7 @@ class VideoGenerationVersion(BaseModel):
         ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
     )
     version_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    variant_group_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
     provider: Mapped[str] = mapped_column(String(32), default="seedance", nullable=False)
     model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -169,6 +268,7 @@ class VideoGenerationVersion(BaseModel):
     parameter_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     first_frame_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_frame_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reference_asset_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     template_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # 选择状态（当前结果）
@@ -176,7 +276,7 @@ class VideoGenerationVersion(BaseModel):
     selected_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     selected_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
-    # 绑定分镜（手动绑定）
+    # 旧版本遗留字段，停止写入；保留数据库列以兼容已有数据迁移。
     bound_shot_id: Mapped[str | None] = mapped_column(
         ForeignKey("storyboard_shots.id", ondelete="SET NULL"), index=True, nullable=True
     )

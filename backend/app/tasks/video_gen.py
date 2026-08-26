@@ -40,6 +40,3 @@ def video_gen_job_task(self, job_id: str) -> dict[str, Any]:
         finally:
             db.close()
         raise self.retry(exc=exc) from exc
-
-
-video_gen_job_sync = _execute

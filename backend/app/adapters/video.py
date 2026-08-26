@@ -45,6 +45,7 @@ class VideoAdapter(BaseAIAdapter):
             "image_to_video": False,
             "async_task": False,
             "cancel_task": False,
+            "generate_audio": False,
         }
 
 
@@ -284,6 +285,7 @@ class MiniMaxH3VideoAdapter(VideoAdapter):
         prompt: str,
         first_frame_bytes: bytes | None = None,
         last_frame_bytes: bytes | None = None,
+        reference_frame_bytes: list[bytes] | None = None,
         mode: str = "image_to_video",
         duration: int = 5,
         resolution: str | None = None,
@@ -414,6 +416,8 @@ class SeedanceVideoAdapter(VideoAdapter):
     - 图生视频（image_to_video）：上传 1 张首帧；
     - 首尾帧（first_last_frame_video）：上传 2 张图片，顺序固定为
       [first_frame, last_frame]；
+    - 多参考图（multi_reference_video）：上传 2~9 张图片，顺序固定为
+      [reference_image, ...]；Seedance 2.0 原生支持。
     - 不支持文生视频，text_to_video=False；不提供任何自动回退。
 
     能力矩阵：image_to_video / first_last_frame_video / async_task / cancel_task。
@@ -427,6 +431,7 @@ class SeedanceVideoAdapter(VideoAdapter):
             "text_to_video": False,
             "image_to_video": True,
             "first_last_frame_video": True,
+            "multi_reference_video": True,
             "async_task": True,
             "cancel_task": True,
             "generate_audio": True,  # Seedance 2.0 支持生成同步声音（默认关闭）
@@ -507,6 +512,7 @@ class SeedanceVideoAdapter(VideoAdapter):
         prompt: str,
         first_frame_bytes: bytes | None = None,
         last_frame_bytes: bytes | None = None,
+        reference_frame_bytes: list[bytes] | None = None,
         mode: str = "image_to_video",
         duration: int = 5,
         resolution: str | None = None,
@@ -523,9 +529,13 @@ class SeedanceVideoAdapter(VideoAdapter):
         if not self.is_available():
             self._raise_unavailable("generate_video")
 
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": (prompt or "建筑工程演示视频")[:2000]}
-        ]
+        prompt_text = (prompt or "建筑工程演示视频").strip()
+        if len(prompt_text) > 2000:
+            raise AIProviderError(
+                f"Seedance 最终提示词为 {len(prompt_text)} 字符，超过 2000 字符安全上限；"
+                "系统不会静默截断施工顺序或安全约束，请精简后重试。"
+            )
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt_text}]
 
         if mode == "image_to_video":
             if not first_frame_bytes:
@@ -558,31 +568,73 @@ class SeedanceVideoAdapter(VideoAdapter):
                     "role": "last_frame",
                 }
             )
+        elif mode == "multi_reference_video":
+            refs = [item for item in (reference_frame_bytes or []) if item]
+            if len(refs) < 2 or len(refs) > 9:
+                raise AIProviderError("Seedance 多参考图模式需要 2~9 张图片，且顺序必须明确。")
+            for item in refs:
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _video_image_data_url(item)},
+                        "role": "reference_image",
+                    }
+                )
         else:
             raise AIProviderError(f"Seedance 不支持的生成模式: {mode}")
 
+        model_name = str(
+            self.config.get("model") or settings.seedance_video_model
+        ).strip()
+        resolution_value = _seedance_resolution(
+            resolution
+            or self.config.get("resolution")
+            or settings.seedance_video_resolution,
+            model_name,
+        )
         payload: dict[str, Any] = {
-            "model": str(self.config.get("model") or settings.seedance_video_model),
+            "model": model_name,
             "content": content,
-            "duration": int(duration),
-            "resolution": str(
-                resolution
-                or self.config.get("resolution")
-                or settings.seedance_video_resolution
-                or "720p"
-            ),
+            "duration": _seedance_duration(duration, model_name),
             "watermark": bool(watermark),
             # 默认关闭生成声音，避免生成不可控的音效/对白。
             "generate_audio": bool(generate_audio),
         }
+        # r2v 兼容网关（尤其是 doubao-seedance-2-0）会拒绝显式的
+        # resolution 字段。该字段在 Seedance 接口中本来就是可选的，
+        # 多参考图模式直接使用模型默认分辨率；其它模式继续保留用户选择。
+        if mode != "multi_reference_video":
+            payload["resolution"] = resolution_value
         if aspect_ratio:
             payload["ratio"] = str(aspect_ratio)
         if seed is not None:
             payload["seed"] = int(seed)
 
-        created = self._request_json(
-            "POST", "/contents/generations/tasks", payload=payload
-        )
+        try:
+            created = self._request_json(
+                "POST", "/contents/generations/tasks", payload=payload
+            )
+        except AIProviderError as exc:
+            # 部分 r2v 兼容网关虽然沿用 Seedance 接口，却不接受显式
+            # resolution；让服务端使用模型默认值即可，避免 400 直接中断试生成。
+            error_text = str(exc).lower()
+            resolution_rejected = (
+                "resolution" in error_text
+                and any(token in error_text for token in ("not valid", "invalid", "unsupported"))
+            )
+            if not resolution_rejected:
+                raise
+            retry_payload = dict(payload)
+            retry_payload.pop("resolution", None)
+            logger.warning(
+                "seedance_retry_without_resolution",
+                model=model_name,
+                mode=mode,
+                requested_resolution=resolution_value,
+            )
+            created = self._request_json(
+                "POST", "/contents/generations/tasks", payload=retry_payload
+            )
         task_id = created.get("id") or created.get("task_id")
         if not task_id:
             raise AIProviderError("Seedance 创建视频任务后未返回任务 ID")
@@ -627,6 +679,7 @@ class SeedanceVideoAdapter(VideoAdapter):
         duration: float = 5.0,
         first_frame_bytes: bytes | None = None,
         last_frame_bytes: bytes | None = None,
+        reference_frame_bytes: list[bytes] | None = None,
         **kwargs: Any,
     ) -> bytes:
         """同步便捷入口：创建任务 → 轮询 → 下载 MP4。
@@ -640,6 +693,7 @@ class SeedanceVideoAdapter(VideoAdapter):
             prompt=prompt,
             first_frame_bytes=first_frame_bytes,
             last_frame_bytes=last_frame_bytes,
+            reference_frame_bytes=reference_frame_bytes,
             mode=mode,
             duration=max(1, int(duration)),
             resolution=kwargs.pop("resolution", None),
@@ -684,6 +738,7 @@ class MockVideoAdapter(VideoAdapter, MockMixin):
             "first_last_frame_video": True,
             "async_task": False,
             "cancel_task": False,
+            "generate_audio": False,
         }
 
     def generate(self, prompt: str, *, duration: float = 5.0, **kwargs: Any) -> bytes:
@@ -804,6 +859,42 @@ def _extract_minimax_v2_error(body: str, status_code: int) -> str:
     if isinstance(error, dict) and error.get("message"):
         return f"MiniMax H3 视频任务失败（{status_code}）: {error['message']}"
     return f"MiniMax H3 视频请求失败（HTTP {status_code}）"
+
+
+def _seedance_resolution(value: str | None, model: str) -> str:
+    """把前端/AI 配方的分辨率统一为 Seedance API 的小写枚举。
+
+    Fast/Mini 版本最高支持 720p；遇到模型不认识的值时使用官方默认 720p。
+    具体网关若对 r2v 仍不接受显式字段，由创建任务处的重试逻辑交给服务端取默认值。
+    """
+    raw = str(value or "720p").strip().lower().replace(" ", "")
+    aliases = {
+        "480": "480p",
+        "480p": "480p",
+        "720": "720p",
+        "720p": "720p",
+        "1080": "1080p",
+        "1080p": "1080p",
+        "2k": "1080p",
+        "4k": "4k",
+    }
+    normalized = aliases.get(raw, "720p")
+    model_lower = str(model or "").lower()
+    if "fast" in model_lower or "mini" in model_lower:
+        return normalized if normalized in {"480p", "720p"} else "720p"
+    return normalized
+
+
+def _seedance_duration(duration: float | int, model: str) -> int:
+    """把时长限制到当前 Seedance 模型可接受的整数范围。"""
+    try:
+        value = int(round(float(duration)))
+    except (TypeError, ValueError):
+        value = 5
+    # Seedance 2.0 / 2.0 fast 的官方时长范围是 4~15 秒。
+    if "seedance-2-0" in str(model or "").lower():
+        return max(4, min(value, 15))
+    return max(2, min(value, 15))
 
 
 def _minimax_h3_resolution(value: str | None) -> str:

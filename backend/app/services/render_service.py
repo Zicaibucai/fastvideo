@@ -1,4 +1,4 @@
-"""渲染服务：任务编排、质量检查、版本管理、分镜绑定、视频段标记。
+"""渲染服务：任务编排、质量检查、版本管理。
 
 核心原则：
 - AI 渲染仅用于视觉增强，不做工程模型自动校核。
@@ -14,6 +14,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.factory import get_image_adapter
@@ -41,7 +42,6 @@ def create_render_job(
     db: Session,
     *,
     project_id: str,
-    storyboard_shot_id: str | None,
     source_asset_id: str | None,
     preset_id: str | None,
     operation_type: str,
@@ -70,7 +70,6 @@ def create_render_job(
 ) -> RenderJob:
     job = RenderJob(
         project_id=project_id,
-        storyboard_shot_id=storyboard_shot_id,
         source_asset_id=source_asset_id,
         preset_id=preset_id,
         operation_type=operation_type,
@@ -124,6 +123,9 @@ def run_render_job(job_id: str) -> dict[str, Any]:
     5. 更新任务状态
     """
     from app.core.database import SessionLocal
+    from app.services.ai_configuration import refresh_runtime_config_from_db
+
+    refresh_runtime_config_from_db()
 
     db = SessionLocal()
     try:
@@ -200,8 +202,16 @@ def run_render_job(job_id: str) -> dict[str, Any]:
 
         # 保存结果
         source_bytes_for_check = source_bytes or _placeholder_bytes()
+        db.query(RenderJob).filter(RenderJob.id == job.id).with_for_update().one()
+        existing_max_version = (
+            db.query(func.max(RenderVersion.version_number))
+            .filter(RenderVersion.render_job_id == job.id)
+            .scalar()
+            or 0
+        )
         created_versions = []
         for i, data in enumerate(results):
+            version_number = int(existing_max_version) + i + 1
             # 质量检查
             metrics = quality_check(source_bytes_for_check, data)
             quality_status = metrics["quality_status"]
@@ -209,7 +219,7 @@ def run_render_job(job_id: str) -> dict[str, Any]:
             # 保存图片
             result_key = (
                 f"projects/{job.project_id}/render/{job.id}/"
-                f"version_{i + 1}_{seed}.png"
+                f"version_{version_number}_{seed}.png"
             )
             storage.save(result_key, data)
             thumb = make_thumbnail(_img_from_bytes(data))
@@ -219,7 +229,7 @@ def run_render_job(job_id: str) -> dict[str, Any]:
             # 创建 Asset
             asset = Asset(
                 project_id=job.project_id,
-                name=f"渲染V{i + 1} ({job.operation_type})",
+                name=f"渲染V{version_number} ({job.operation_type})",
                 asset_type="image",
                 source="render",
                 file_key=result_key,
@@ -248,7 +258,7 @@ def run_render_job(job_id: str) -> dict[str, Any]:
                 render_job_id=job.id,
                 source_asset_id=job.source_asset_id,
                 result_asset_id=asset.id,
-                version_number=i + 1,
+                version_number=version_number,
                 provider=job.provider,
                 model_name=job.model_name,
                 seed=seed,
@@ -329,7 +339,7 @@ def _make_placeholder_img():
 
 
 # ============================================================
-# 版本管理与分镜绑定
+# 版本管理（渲染结果只属于素材库）
 # ============================================================
 
 def ensure_v0_version(db: Session, asset_id: str) -> None:
@@ -361,179 +371,24 @@ def ensure_v0_version(db: Session, asset_id: str) -> None:
     db.commit()
 
 
-def select_version_for_shot(
-    db: Session,
-    project_id: str,
-    shot_id: str,
-    version_id: str,
-    user_name: str,
-) -> dict[str, Any]:
-    """将某个渲染版本设为分镜当前画面。
-
-    1. 更新分镜当前画面引用（image_asset_id + render_version_id + source_model_asset_id）
-    2. 记录选择历史
-    3. 若分镜已被视频工程使用，标记相关视频段需要重新生成
-    4. 返回分镜更新结果
-    """
-    shot = db.get(StoryboardShot, shot_id)
-    if not shot or shot.project_id != project_id:
-        raise RuntimeError("分镜不存在")
-
-    version = db.get(RenderVersion, version_id)
-    if not version:
-        raise RuntimeError("渲染版本不存在")
-    if version.quality_status == "failed":
-        raise RuntimeError("结构一致性检查未通过（failed）的版本不能设为正式分镜画面")
-
-    result_asset = db.get(Asset, version.result_asset_id) if version.result_asset_id else None
-    if result_asset and result_asset.project_id != project_id:
-        raise RuntimeError("素材不属于当前项目")
-
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    # 更新版本选择状态（取消旧选择）
-    db.query(RenderVersion).filter(
-        RenderVersion.render_job_id == version.render_job_id,
-        RenderVersion.is_selected.is_(True),
-    ).update({"is_selected": False})
-    version.is_selected = True
-    version.selected_by = user_name
-    version.selected_at = now
-
-    # 更新分镜
-    old_image_id = shot.image_asset_id
-    shot.image_asset_id = result_asset.id if result_asset else old_image_id
-    shot.render_version_id = version.id
-    if result_asset:
-        shot.visual_review_status = "approved"
-        # 记录来源链：分镜 → 结果素材 → 渲染版本 → 原始模型截图
-        if version.source_asset_id:
-            shot.source_model_asset_id = version.source_asset_id
-        # 结果图自动加入素材库（已创建 Asset）
-
-    # 记录选择历史
-    history = list(shot.visual_history or [])
-    history.append(
-        {
-            "version_id": version.id,
-            "asset_id": result_asset.id if result_asset else None,
-            "selected_by": user_name,
-            "selected_at": now,
-        }
-    )
-    shot.visual_history = history
-
-    # 视频工程标记需重建
-    affected_videos = _mark_video_segments_rebuild(db, project_id, shot_id)
-
-    db.commit()
-    db.refresh(shot)
-
-    return {
-        "shot_id": shot_id,
-        "image_asset_id": shot.image_asset_id,
-        "render_version_id": version.id,
-        "visual_review_status": shot.visual_review_status,
-        "affected_videos": affected_videos,
-    }
-
-
-def _mark_video_segments_rebuild(
-    db: Session,
-    project_id: str,
-    shot_id: str,
-    reason: str = "分镜画面已更换",
-) -> list[str]:
-    """若分镜被视频工程使用，标记相关视频分段需要重新生成。"""
-    from app.models.video_project import VideoProject
-
-    affected = []
-    vps = (
-        db.query(VideoProject)
-        .filter(VideoProject.project_id == project_id)
-        .all()
-    )
-    for vp in vps:
-        timeline = vp.timeline or []
-        changed = False
-        for item in timeline:
-            if isinstance(item, dict) and item.get("shot_id") == shot_id:
-                item["needs_rebuild"] = True
-                item["rebuild_reason"] = reason
-                changed = True
-            elif isinstance(item, list) and len(item) > 0 and item[0] == shot_id:
-                # 兼容旧格式 [shot_id, sequence, duration]
-                changed = True
-        if changed:
-            vp.timeline = timeline
-            if vp.status == "success":
-                vp.status = "draft"
-            vp.meta = {
-                **(vp.meta or {}),
-                "rebuild_required": True,
-                "rebuild_reason": reason,
-            }
-            affected.append(vp.id)
-    if affected:
-        db.commit()
-    return affected
-
-
-def restore_shot_visual(db: Session, project_id: str, shot_id: str, version_id: str, user_name: str) -> dict:
-    """恢复历史选择（版本恢复只改变当前选择，不复制文件）。"""
-    shot = db.get(StoryboardShot, shot_id)
-    if not shot or shot.project_id != project_id:
-        raise RuntimeError("分镜不存在")
-    history = shot.visual_history or []
-    target = next((h for h in history if h.get("version_id") == version_id), None)
-    if not target:
-        raise RuntimeError("历史选择不存在")
-
-    version = db.get(RenderVersion, version_id)
-    if not version:
-        raise RuntimeError("渲染版本不存在")
-
-    result_asset = db.get(Asset, version.result_asset_id) if version.result_asset_id else None
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-
-    shot.image_asset_id = result_asset.id if result_asset else shot.image_asset_id
-    shot.render_version_id = version.id
-    shot.visual_review_status = "approved"
-    if version.source_asset_id:
-        shot.source_model_asset_id = version.source_asset_id
-
-    history.append(
-        {
-            "version_id": version.id,
-            "asset_id": result_asset.id if result_asset else None,
-            "selected_by": user_name,
-            "selected_at": now,
-            "restored": True,
-        }
-    )
-    shot.visual_history = history
-    db.commit()
-    db.refresh(shot)
-    return {"shot_id": shot_id, "render_version_id": version.id}
-
-
 def soft_delete_version(db: Session, project_id: str, version_id: str, user_name: str) -> None:
-    """删除未使用版本（软删除 + 引用检查）。"""
+    """删除未使用版本（软删除 + 分镜引用检查）。"""
     version = db.get(RenderVersion, version_id)
     if not version:
         raise RuntimeError("渲染版本不存在")
+    result_asset = db.get(Asset, version.result_asset_id) if version.result_asset_id else None
+    source_asset = db.get(Asset, version.source_asset_id) if version.source_asset_id else None
+    if (result_asset and result_asset.project_id != project_id) or (source_asset and source_asset.project_id != project_id):
+        raise RuntimeError("渲染版本不存在")
 
-    # 引用检查：是否被分镜引用
-    referenced = (
-        db.query(StoryboardShot)
-        .filter(
-            StoryboardShot.project_id == project_id,
-            StoryboardShot.render_version_id == version_id,
-        )
-        .first()
-    )
+    # 版本只能由同项目分镜引用；被当前分镜使用时保留，避免素材库出现悬空画面。
+    referenced = db.query(StoryboardShot).filter(
+        StoryboardShot.project_id == project_id,
+        StoryboardShot.render_version_id == version_id,
+        StoryboardShot.is_active.is_(True),
+    ).first()
     if referenced:
-        raise RuntimeError("该版本正被分镜引用，不能删除")
+        raise RuntimeError("被引用版本不能删除")
 
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     version.is_deleted = True

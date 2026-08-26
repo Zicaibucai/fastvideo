@@ -11,7 +11,7 @@
 
 ## ✨ 功能特性
 
-- **招标资料管理**：上传招标文件 / 评分办法 / 施工组织设计 / 项目概况 / 进度计划 / 专项方案 / 企业资信等，支持 PDF / DOCX / TXT，SHA-256 去重，单文件 100MB 上限。
+- **招标资料管理**：上传招标文件 / 评分办法 / 施工组织设计 / 项目概况 / 进度计划 / 专项方案 / 企业资信等，支持 PDF / DOCX / TXT，SHA-256 去重，普通上传单文件 30MB 上限；更大文件使用分片上传。
 - **精准文档解析**：按页解析 PDF（pdfplumber）/ DOCX / TXT，提取表格与目录结构；扫描页自动检测并调用 OCR（Mock / Tesseract），OCR 失败不阻断解析。
 - **工程参数台账**：自动提取 20 类关键参数（面积/工期/日期/高度/层数/金额/评分项等），每个参数保存来源页码与原文；不同来源冲突时标记 conflict 不自动选择，支持人工确认/驳回/修改。
 - **评分点覆盖**：从评分办法提取评分点与分值，统计每个评分点被哪些分镜覆盖。
@@ -23,7 +23,7 @@
 - **配音制作（Phase 4）**：企业配音模板（正式稳重/沉稳大气/科技专业/亲和自然等 8 种风格）、音色授权管理、试听；中文朗读规范化（数字/日期/单位/缩写/发音词典）；时长估算与智能适配（≤5% 匹配 / 5~12% 微调 / >12% 需调整解说词）；音频版本管理（V1 起递增、设为正式、恢复历史、软删除）；解说词修改自动标记旧配音/字幕过期；自动生成字幕时间轴与项目级/单条 SRT；导出全部 WAV/MP3/SRT；Mock 音频标记演示提示音。
 - **素材库与视频导出**：AI 生成画面/配音/视频，16:9 1080P MP4 导出。
 - **多分段视频合成（Phase 5）**：分镜→分段→转场拼接→背景音乐→Logo/片头片尾→1080P H.264 MP4；图片 Ken Burns 动态化、视频素材标准化（循环/裁切）；正式配音混入 + 背景音乐自动压低（ducking）；ASS 中文字幕烧录与独立 UTF-8 SRT；input_hash 缓存（素材变化只重建相关分段）；演示版/正式版导出校验严格区分；导出报告。
-- **AI 视频生成（Phase 6/7，Seedance）**：独立「AI 视频生成」页面（`/projects/:projectId/ai-video`），图片驱动视频分镜工作流——用户主动选择首帧/尾帧、选择 10 种建筑视频模板、填写独立视频提示词（不引用解说词）、生成单个视频分镜。默认 Provider 为 Seedance（火山方舟 Ark），MiniMax 保留但不再默认调用；支持首尾帧（顺序固定 `[first_frame, last_frame]`）、时长/比例/分辨率/随机种子/声音开关（默认关闭）；每次生成保存完整参数快照可复现；结果版本可预览/下载/选为当前/绑定回分镜；建筑强约束默认启用，冲突指令（增加楼层/改变轮廓/移动道路/替换主楼）阻止提交。
+- **AI 视频生成（Phase 6/7，Seedance）**：独立「AI 视频生成」页面（`/project/:projectId/ai-video`），图片驱动视频工作流——用户主动选择首帧/尾帧、选择 42 种建筑视频模板、填写独立视频提示词（不引用解说词）、生成独立视频素材。默认 Provider 为 Seedance（火山方舟 Ark），MiniMax 保留但不再默认调用；支持首尾帧（顺序固定 `[first_frame, last_frame]`）、时长/比例/分辨率/随机种子/声音开关（默认关闭）；每次生成保存完整参数快照可复现；结果版本可预览/下载/选为当前。AI 视频结果不绑定解说词分镜，只在「视频工程」中由视频分段选择素材；建筑强约束默认启用，冲突指令（增加楼层/改变轮廓/移动道路/替换主楼）阻止提交。
 - **AI 接口全 Mock 可运行**：无 API Key 自动进入 Mock 演示模式，Mock 渲染用 Pillow 生成真实可访问图片，所有页面与流程可完整走通。
 - **异步任务队列**：所有耗时 AI 任务经 Celery 异步执行，前端实时展示排队/处理中/成功/失败/重试状态。
 
@@ -37,7 +37,7 @@
 | 队列 | Redis 7 + Celery 5 |
 | 文件存储 | 本地存储 + MinIO 兼容 S3 |
 | 视频处理 | FFmpeg |
-| AI | Adapter 适配器模式：DeepSeek V4 Flash / Seedream 4.5 图生图 / Seedance 2.0 标准档图生视频（火山方舟 Ark）/ 火山豆包语音合成 TTS + Mock |
+| AI | Adapter 适配器模式：Kimi 文本结构化+多模态 / Seedream 4.5 图生图 / Seedance 2.0 标准档图生视频（火山方舟 Ark）/ 火山豆包语音合成 TTS + Mock |
 | 部署 | Docker Compose（postgres / redis / minio / api / worker / frontend） |
 
 ## 📁 目录结构
@@ -84,6 +84,7 @@ fastvideo/
 
 ```bash
 cp .env.example .env
+# 启动共享/生产环境前，请替换 POSTGRES_PASSWORD、MINIO_ROOT_PASSWORD、SECRET_KEY、ADMIN_PASSWORD
 docker compose up -d --build
 # 前端 http://localhost:5173
 # 后端 API http://localhost:8000/docs
@@ -91,7 +92,7 @@ docker compose up -d --build
 
 ### 方式二：本地开发
 
-基础设施（PostgreSQL / Redis / MinIO）：
+如果使用 Docker 数据库方案，先启动基础设施（PostgreSQL / Redis / MinIO）：
 
 ```bash
 docker compose up -d postgres redis minio
@@ -105,8 +106,16 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp ../.env.example ../.env
 alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+cd ..
+./start_dev.sh
+
+# 也可以直接启动；视频预览连接较多时建议设置热重载退出超时
+# cd backend && python run_dev.py
 ```
+
+`start_dev.sh` 会一起启动本地 FastAPI、Vite 前端和 Celery 队列，并复用已经运行的 Redis；按 `Ctrl+C` 会一起停止本地开发服务。停止但不删除数据可执行 `./stop_dev.sh`。
+
+当前 `.env` 使用 SQLite + 本地素材存储时，不需要启动 PostgreSQL 或 MinIO；只需确保 Redis 已安装（脚本会在 macOS 上自动尝试启动 Homebrew Redis）。SQLite 数据和素材文件会原样保留。
 
 前端：
 
@@ -124,7 +133,7 @@ npm run dev
 
 ```bash
 # .env 示例
-AI_LLM_PROVIDER=disabled          # 或 deepseek / openai
+AI_LLM_PROVIDER=disabled          # 或 kimi / openai
 AI_IMAGE_PROVIDER=disabled        # 或 minimax / openai
 AI_VIDEO_PROVIDER=disabled
 AI_TTS_PROVIDER=disabled
@@ -132,13 +141,24 @@ AI_TTS_PROVIDER=disabled
 
 Mock 模式下所有 AI 功能返回可用的演示数据，页面全流程可操作。
 
+### 认证与文件访问
+
+浏览器登录态使用 `HttpOnly` Cookie（`fastvideo_access`），前端不会把 JWT 写入
+`localStorage`，文件 URL 也不接受 `?token=`。Bearer Token 仅保留给脚本或服务端 API
+客户端使用。生产环境必须设置 `APP_ENV=production`、`DEBUG=false`、长度至少 32 位的
+随机 `SECRET_KEY`、强管理员密码，并启用 `AUTH_COOKIE_SECURE=true`（HTTPS）。
+生产环境还应设置 `ALLOW_PUBLIC_REGISTRATION=false`；管理员在人员管理页创建账号。AI
+Provider 密钥通过设置页保存时会以加密形式落库，Worker 会在任务开始前刷新配置。
+加密密钥由 `SECRET_KEY` 派生；更换 `SECRET_KEY` 前请先迁移或重新录入已保存的 Provider Key，避免历史密钥无法解密。
+
 ## 🔌 AI 服务接入
 
 所有 AI 服务统一走 `backend/app/adapters/` 下的适配器，新增服务只需实现统一接口并在 `config.py` 中选择 provider：
 
 | 能力 | 适配器 | 支持 Provider |
 |---|---|---|
-| LLM 解说词生成 | `adapters/llm.py` | `deepseek` / `openai` / `disabled`(mock) |
+| LLM 解说词生成 | `adapters/llm.py` | `kimi`（默认）/ `deepseek` / `openai` / `disabled`(mock) |
+| 提示词大师（首尾帧视觉理解） | `adapters/llm.py` | `kimi`（默认，文本+图片输入）/ `disabled`(mock) |
 | 图片生成/参考图渲染 | `adapters/image.py` | `seedream`（默认）/ `minimax` / `openai` / `disabled`(mock) |
 | 图生视频/首尾帧视频 | `adapters/video.py` | `seedance`（默认）/ `minimax` / `disabled`(mock) |
 | TTS 配音 | `adapters/tts.py` | `volcengine`（火山豆包语音）/ `openai` / `disabled`(mock) |
@@ -147,9 +167,12 @@ Mock 模式下所有 AI 功能返回可用的演示数据，页面全流程可�
 
 ```dotenv
 # 根目录 .env（已被 .gitignore 忽略）
-AI_LLM_PROVIDER=deepseek
-AI_LLM_MODEL=deepseek-v4-flash
-DEEPSEEK_API_KEY=在这里填写DeepSeekKey
+# 解说词、工程信息提取、提示词大师统一使用 Kimi
+AI_LLM_PROVIDER=kimi
+AI_LLM_MODEL=kimi-k3
+AI_PROMPT_MASTER_PROVIDER=kimi
+AI_PROMPT_MASTER_MODEL=kimi-k3
+KIMI_API_KEY=在这里填写MoonshotKey
 
 # 图生图默认 Seedream 4.5（火山方舟 Ark）
 AI_IMAGE_PROVIDER=seedream
@@ -163,7 +186,7 @@ SEEDANCE_API_KEY=在这里填写火山方舟APIKey
 SEEDANCE_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 ```
 
-**API Key 填入位置**：图生图（Seedream）与图生视频（Seedance）同属火山方舟，只需在 `.env` 的 `SEEDANCE_API_KEY`（或单独 `SEEDREAM_API_KEY`）填入**同一个火山方舟 API Key**。Key 在[火山引擎控制台](https://console.volcengine.com/)「方舟 ARK → API Key 管理」创建。MiniMax 仅当 `AI_IMAGE_PROVIDER=minimax` / `AI_VIDEO_PROVIDER=minimax` 时才需要 `MINIMAX_API_KEY`。
+**API Key 填入位置**：解说词、工程信息提取和提示词大师统一使用 Kimi，填写 `.env` 的 `KIMI_API_KEY`；图生图（Seedream）与图生视频（Seedance）仍使用火山方舟 API Key，填写 `ARK_API_KEY` 或 `SEEDANCE_API_KEY`。MiniMax 仅当 `AI_IMAGE_PROVIDER=minimax` / `AI_VIDEO_PROVIDER=minimax` 时才需要 `MINIMAX_API_KEY`。
 
 Seedream 4.5 图生图通过 `image` 参数传入参考图（base64 Data URL），`size` 支持 `2K/4K` 或像素值；模型名与基础地址可配置，默认 `doubao-seedream-4-5-251128`。Seedance 2.0 标准档模型 `doubao-seedance-2-0-260128` 支持首帧/首尾帧图生视频，默认关闭生成声音。Key 留空时相应模块自动降级 Mock。修改 `.env` 后须重启 API 和 Celery Worker。
 
@@ -195,7 +218,7 @@ VOLCENGINE_TTS_VOICE=zh_female_xiaohe_uranus_bigtts
 
 ### 大文件招标资料上传
 
-普通资料上限为 100MB；超过该大小的 PDF、DOCX、DOC、TXT 会自动改用 10MB 分片上传，支持 1GB 以内文件的断点续传。上传中断后重新选择同一文件，浏览器会从已完成分片继续；合并完成后自动进入原有的后台文档解析队列。请保留浏览器页面直到“上传成功，正在自动解析”提示出现。
+普通资料上限为 30MB；超过该大小的 PDF、DOCX、TXT 会自动改用 10MB 分片上传，支持 1GB 以内文件的断点续传。上传中断后重新选择同一文件，浏览器会从已完成分片继续；合并完成后自动进入原有的后台文档解析队列。请保留浏览器页面直到“上传成功，正在自动解析”提示出现。
 
 ## ✅ 测试与构建
 
@@ -208,9 +231,9 @@ cd frontend && npm run build
 ```
 
 ### 当前验证结果
-- 后端 pytest：**149 passed**（原 121 项 + Seedance 契约 8 项 + Phase7 AI 视频 20 项）；沙箱内 `test_phase5_video`/`test_phase6_resumable_upload` 共 2 项因沙箱文件删除权限受限无法通过，属环境限制，与本次改动无关
+- 后端全量测试：**228 passed**；覆盖文档解析、渲染、配音、视频工程、AI 视频、上传安全、AI 配置刷新和认证限流。运行前仍应以当前分支实际 pytest 结果为准
 - 前端 `tsc -b` + `vite build --outDir /tmp`：**构建成功**（存在主包体积优化提示，不影响运行）
-- Alembic 迁移：`alembic upgrade head` 到 **0007 head**，新增 video_generation_templates / jobs / versions 三张表
+- Alembic 迁移：`alembic upgrade head` 到 **0019 head**，包含视频生成、叙事证据、模板参考帧、分镜视觉绑定、项目级幂等约束和版本号唯一约束等表结构
 - Seedance 契约验收：图生视频（1 张首帧）、首尾帧（2 张图顺序固定）、禁文生视频回退、异步轮询/下载/取消、模型与地址可配置均通过 Mock HTTP 测试；因未提供真实 Seedance Key，未执行付费线上调用
 - 浏览器点击验收：登录 → 新建项目 → 项目详情 → 解说词与分镜 → 画面制作 → AI 视频生成 → 配音制作 → 视频工作区；控制台无 error/warn
 
@@ -316,15 +339,15 @@ cd frontend && npm run build
 └── frontend/src/ (api/index.ts, api/types.ts)
 ```
 
-**Phase 6/7（AI 视频生成 · Seedance 图片驱动视频分镜）**：
+**Phase 6/7（AI 视频生成 · Seedance 图片驱动视频素材）**：
 ```
 新增：
 ├── backend/
-│   ├── alembic/versions/0007_ai_video_generation.py          # video_generation_templates/jobs/versions 三张表
+│   ├── alembic/versions/0019_version_number_constraints.py  # 当前迁移链 head
 │   ├── app/models/video_generation.py                        # 模板/任务/版本 数据实体
 │   ├── app/schemas/video_gen.py                              # 模板/任务/版本/绑定/约束 Schema
-│   ├── app/services/video_gen_templates.py                   # 10 个内置建筑视频模板 + 建筑强约束
-│   ├── app/services/video_gen_service.py                     # 任务编排/约束拦截/版本管理/绑定分镜
+│   ├── app/services/video_gen_templates.py                   # 42 个内置建筑视频模板 + 建筑强约束
+│   ├── app/services/video_gen_service.py                     # 任务编排/约束拦截/版本管理
 │   ├── app/tasks/video_gen.py                                # 视频生成 Celery 任务 + 同步降级
 │   ├── app/api/v1/video_gen.py                               # /projects/{id}/ai-video 路由
 │   └── tests/test_phase7_ai_video.py                         # 20 项测试

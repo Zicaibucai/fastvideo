@@ -17,23 +17,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('fastvideo_token')
-    if (!token) {
-      setLoading(false)
-      return
-    }
     authApi
       .me()
       .then((res) => setUser(res.data))
-      .catch(() => {
-        localStorage.removeItem('fastvideo_token')
-      })
+      .catch(() => setUser(null))
       .finally(() => setLoading(false))
   }, [])
 
   const login = async (email: string, password: string) => {
-    const res = await authApi.login(email, password)
-    localStorage.setItem('fastvideo_token', res.data.access_token)
+    await authApi.login(email, password)
     const me = await authApi.me()
     setUser(me.data)
   }
@@ -43,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const logout = () => {
-    localStorage.removeItem('fastvideo_token')
+    void authApi.logout().catch(() => {})
     setUser(null)
   }
 

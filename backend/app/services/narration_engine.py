@@ -15,7 +15,7 @@ import re
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.adapters.factory import get_llm_adapter
 from app.core.database import SessionLocal
@@ -25,6 +25,9 @@ from app.models.document_chunk import DocumentChunk
 from app.models.document_page import DocumentPage
 from app.models.project import Project
 from app.models.scoring_point import ScoringPoint
+from app.models.narration_beat import NarrationBeat
+from app.models.narration_run import NarrationEvidence, NarrationRun
+from app.models.render_task import RenderTask
 from app.models.storyboard_shot import StoryboardShot
 
 logger = get_logger(__name__)
@@ -39,6 +42,53 @@ VisualType = Literal[
     "generated_video", "bim_animation", "infographic",
 ]
 FactCheckStatus = Literal["verified", "partial", "unverified", "conflict"]
+
+_VISUAL_TYPE_ALIASES = {
+    "title_card": "title",
+    "titlecard": "title",
+    "标题": "title",
+    "model": "model_image",
+    "3d": "model_image",
+    "render": "model_image",
+    "rendering": "model_image",
+    "模型": "model_image",
+    "site": "site_photo",
+    "photo": "site_photo",
+    "photograph": "site_photo",
+    "现场照片": "site_photo",
+    "image": "generated_image",
+    "picture": "generated_image",
+    "图片": "generated_image",
+    "video": "generated_video",
+    "短视频": "generated_video",
+    "animation": "bim_animation",
+    "bim": "bim_animation",
+    "bim动画": "bim_animation",
+    "map": "infographic",
+    "diagram": "infographic",
+    "chart": "infographic",
+    "flowchart": "infographic",
+    "table": "infographic",
+    "信息图": "infographic",
+    "信息图表": "infographic",
+}
+
+
+def _normalise_visual_type(value: Any) -> str:
+    if not isinstance(value, str):
+        return "generated_image"
+    key = re.sub(r"[\s_\-]+", "", value.strip().lower())
+    if key in {"title", "modelimage", "sitephoto", "generatedimage", "generatedvideo", "bimanimation", "infographic"}:
+        return {
+            "title": "title",
+            "modelimage": "model_image",
+            "sitephoto": "site_photo",
+            "generatedimage": "generated_image",
+            "generatedvideo": "generated_video",
+            "bimanimation": "bim_animation",
+            "infographic": "infographic",
+        }[key]
+    return _VISUAL_TYPE_ALIASES.get(key, "generated_image")
 
 
 class SourceRef(BaseModel):
@@ -61,8 +111,21 @@ class ShotOut(BaseModel):
     videoPrompt: str = ""
     keywords: list[str] = []
     scoringPointIds: list[int] = []
+    evidenceIds: list[str] = []
     sourceReferences: list[SourceRef] = []
     factCheckStatus: FactCheckStatus = "unverified"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalise_model_visual_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data["visualType"] = _normalise_visual_type(data.get("visualType"))
+        for key in ("keywords", "scoringPointIds", "evidenceIds", "sourceReferences"):
+            if data.get(key) is None:
+                data[key] = []
+        return data
 
 
 class NarrationOutput(BaseModel):
@@ -73,30 +136,149 @@ class NarrationOutput(BaseModel):
     shots: list[ShotOut] = Field(min_length=1)
 
 
+class EvidenceItem(BaseModel):
+    evidenceId: str = ""
+    topic: str = ""
+    fact: str = ""
+    parameters: list[str] = []
+    constructionActions: list[str] = []
+    sequenceContext: str = ""
+    sourceReference: SourceRef = Field(default_factory=SourceRef)
+    factCheckStatus: FactCheckStatus = "partial"
+
+
+class EvidenceOutput(BaseModel):
+    evidenceItems: list[EvidenceItem] = []
+    rejectedFacts: list[str] = []
+
+
+def _source_ref_from_row(row: NarrationEvidence) -> SourceRef:
+    reference = dict(row.source_reference or {})
+    page = reference.get("page")
+    if isinstance(page, str):
+        match = re.search(r"\d+", page)
+        page = int(match.group(0)) if match else None
+    return SourceRef(
+        documentId=str(reference.get("documentId") or row.document_id or ""),
+        documentName=str(reference.get("documentName") or (row.document.file_name if row.document else "")),
+        page=page if isinstance(page, int) else None,
+        locationLabel=reference.get("locationLabel"),
+        quote=_clean_one_line(reference.get("quote"), 180) or None,
+    )
+
+
+def _evidence_output_from_rows(rows: list[NarrationEvidence]) -> EvidenceOutput:
+    return EvidenceOutput(
+        evidenceItems=[
+            EvidenceItem(
+                evidenceId=row.id,
+                topic=row.topic,
+                fact=row.fact,
+                parameters=list(row.parameters or []),
+                constructionActions=list(row.construction_actions or []),
+                sequenceContext=row.sequence_context or "",
+                sourceReference=_source_ref_from_row(row),
+                factCheckStatus=row.fact_check_status if row.fact_check_status in {"verified", "partial", "conflict"} else "partial",
+            )
+            for row in rows
+            if row.fact.strip()
+        ],
+        rejectedFacts=[],
+    )
+
+
+class OutlineChapter(BaseModel):
+    sequence: int = Field(ge=1)
+    title: str = ""
+    durationSeconds: int | float = Field(ge=5, le=600)
+    targetCharacters: int = Field(ge=10, le=3000)
+    writingGoal: str = ""
+    scoringFocus: list[str] = []
+    visualPlan: str = ""
+    evidenceIndexes: list[int] = []
+    evidenceIds: list[str] = []
+
+
+class OutlineOutput(BaseModel):
+    totalDurationSeconds: int | float = 0
+    targetCharacters: int = 0
+    chapters: list[OutlineChapter] = Field(min_length=1)
+
+
+class ChapterDraftOutput(BaseModel):
+    shots: list[ShotOut] = Field(min_length=1)
+    unverifiedFacts: list[str] = []
+
+
+class ResegmentShot(BaseModel):
+    """AI 重新分镜的最小输出，正文必须来自现有分镜。"""
+
+    sequence: int = Field(ge=1)
+    title: str = ""
+    section: str = ""
+    narration: str = ""
+    durationSeconds: int | float = Field(ge=1, le=600)
+    visualType: VisualType = "generated_image"
+    visualDescription: str = ""
+    sourceShotSequences: list[int] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalise_visual_type(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data["visualType"] = _normalise_visual_type(data.get("visualType"))
+        if data.get("sourceShotSequences") is None:
+            data["sourceShotSequences"] = []
+        return data
+
+
+class ResegmentOutput(BaseModel):
+    shots: list[ResegmentShot] = Field(min_length=1)
+
+
+class QAReviewPatch(BaseModel):
+    sequence: int = Field(ge=1)
+    narration: str | None = None
+    factCheckStatus: FactCheckStatus | None = None
+    reason: str = ""
+
+
+class QAReviewOutput(BaseModel):
+    issues: list[str] = []
+    unsupportedFacts: list[str] = []
+    patches: list[QAReviewPatch] = []
+
+
 def _extract_json(raw: str) -> str:
-    """从 LLM 输出中稳健提取 JSON。"""
-    raw = raw.strip()
-    # 去掉 markdown 代码块
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-    # 查找最外层 { ... } 或 [ ... ]
+    """从模型输出中提取完整 JSON，允许前后带解释文字或 Markdown。"""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("LLM 返回为空，无法解析 JSON")
+
+    # 不再依赖“第一个左括号到最后一个右括号”。模型有时会在 JSON
+    # 后补一句解释，或在代码块外再输出一个括号，简单截取会误选范围。
+    decoder = json.JSONDecoder()
     try:
-        json.loads(raw)
-        return raw
+        value, end = decoder.raw_decode(text)
+        if isinstance(value, (dict, list)):
+            return text[:end]
     except json.JSONDecodeError:
         pass
-    # 尝试截取第一个 { 到最后一个 }
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = raw[start : end + 1]
+
+    for start, char in enumerate(text):
+        if char not in "{[":
+            continue
         try:
-            json.loads(candidate)
-            return candidate
+            value, end = decoder.raw_decode(text[start:])
         except json.JSONDecodeError:
-            pass
-    raise ValueError("无法从 LLM 输出中解析 JSON")
+            continue
+        if isinstance(value, (dict, list)):
+            return text[start : start + end]
+
+    preview = re.sub(r"\s+", " ", text[:180])
+    raise ValueError(f"无法从 LLM 输出中解析 JSON（返回长度{len(text)}，开头：{preview}）")
 
 
 def parse_narration_output(raw: str) -> NarrationOutput:
@@ -106,14 +288,102 @@ def parse_narration_output(raw: str) -> NarrationOutput:
     # 兼容两种顶层结构：直接数组 或 {shots: [...]}
     if isinstance(data, list):
         data = {"projectSummary": "", "shots": data, "unverifiedFacts": []}
+    data["unverifiedFacts"] = _normalise_unverified_facts(data.get("unverifiedFacts", []))
     return NarrationOutput.model_validate(data)
+
+
+def parse_evidence_output(raw: str) -> EvidenceOutput:
+    json_text = _extract_json(raw)
+    return EvidenceOutput.model_validate(json.loads(json_text))
+
+
+def parse_outline_output(raw: str) -> OutlineOutput:
+    json_text = _extract_json(raw)
+    return OutlineOutput.model_validate(json.loads(json_text))
+
+
+def parse_chapter_draft_output(raw: str) -> ChapterDraftOutput:
+    json_text = _extract_json(raw)
+    data = json.loads(json_text)
+    if isinstance(data, list):
+        data = {"shots": data, "unverifiedFacts": []}
+    data["unverifiedFacts"] = _normalise_unverified_facts(data.get("unverifiedFacts", []))
+    return ChapterDraftOutput.model_validate(data)
+
+
+def parse_resegment_output(raw: str) -> ResegmentOutput:
+    json_text = _extract_json(raw)
+    data = json.loads(json_text)
+    if isinstance(data, list):
+        data = {"shots": data}
+    return ResegmentOutput.model_validate(data)
+
+
+def parse_qa_review_output(raw: str) -> QAReviewOutput:
+    json_text = _extract_json(raw)
+    return QAReviewOutput.model_validate(json.loads(json_text))
+
+
+def _normalise_unverified_facts(items: Any) -> list[str]:
+    """兼容模型把未验证事实写成对象数组的情况。"""
+    if not isinstance(items, list):
+        return []
+    normalised: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            if item.strip():
+                normalised.append(item.strip())
+            continue
+        if isinstance(item, dict):
+            fact = item.get("fact") or item.get("text") or item.get("statement")
+            if fact:
+                status = item.get("status") or item.get("factCheckStatus")
+                normalised.append(f"{fact}（{status}）" if status else str(fact))
+    return list(dict.fromkeys(normalised))
+
+
+def _complete_structured(adapter, prompt: str, parser, *, stage: str, max_tokens: int, temperature: float = 0):
+    """调用结构化阶段，失败时用更大输出预算和明确修正指令重试。"""
+    retry_suffix = (
+        "\n\n【输出修正】上一轮未返回可解析结果。请现在只输出一个完整、合法的 JSON 对象，"
+        "不要输出分析过程、Markdown 代码块或任何 JSON 之外的文字。"
+    )
+    last_error: Exception | None = None
+    retry_max_tokens = min(8000, max(max_tokens + 1500, max_tokens * 2))
+    attempts = ((prompt, max_tokens), (prompt + retry_suffix, retry_max_tokens))
+    for attempt, (current_prompt, current_max_tokens) in enumerate(attempts, start=1):
+        raw = adapter.complete(
+            current_prompt,
+            temperature=temperature,
+            max_tokens=current_max_tokens,
+            response_format={"type": "json_object"},
+        )
+        try:
+            return parser(raw)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "llm_structured_output_invalid",
+                stage=stage,
+                attempt=attempt,
+                response_length=len(raw or ""),
+                response_preview=(raw or "")[:160],
+                error=str(exc),
+            )
+    raise ValueError(f"{stage}阶段连续两次未返回可解析 JSON：{last_error}") from last_error
 
 
 # ============================================================
 # 上下文构建
 # ============================================================
 
-def _build_context(db, project_id: str) -> dict:
+def _build_context(
+    db,
+    project_id: str,
+    *,
+    evidence_run_id: str | None = None,
+    evidence_auto_approve: bool = True,
+) -> dict:
     """收集已确认事实与评分点，构建 LLM 上下文。"""
     project = db.get(Project, project_id)
     facts = (
@@ -128,27 +398,59 @@ def _build_context(db, project_id: str) -> dict:
         .all()
     )
 
+    from app.services.fact_extractor import REVIEW_THRESHOLD
+    from app.services.fact_extractor import AUTO_USE_THRESHOLD
+
     confirmed_facts = [f for f in facts if f.verification_status == "confirmed"]
     sourced_facts = [
         f for f in facts
-        if f.verification_status == "unverified" and f.source_quote and f.document_id
+        if (
+            f.verification_status == "unverified"
+            and f.source_quote
+            and f.document_id
+            # 低于审核阈值的数字仍保留在台账，但不进入解说词证据上下文。
+            and (
+                bool((f.metadata_json or {}).get("auto_usable"))
+                or float(f.confidence or 0) >= REVIEW_THRESHOLD
+                or not f.metadata_json
+            )
+        )
     ]
+    # 先把可自动使用的高置信度事实送入上下文，再按原文页码/提取顺序补充待审核项。
+    # 这样全量数字证据变多后，不会因为前 30 条恰好是低价值编号而挤掉关键参数。
+    sourced_facts.sort(
+        key=lambda f: (
+            0 if ((f.metadata_json or {}).get("auto_usable") or float(f.confidence or 0) >= AUTO_USE_THRESHOLD) else 1,
+            -float(f.confidence or 0),
+            f.page_number if f.page_number is not None else 10**9,
+            (f.metadata_json or {}).get("source_order", 10**9),
+        )
+    )
     conflicts = [f for f in facts if f.verification_status == "conflict"]
 
     fact_lines = _project_field_lines(project)
     for f in confirmed_facts:
+        metadata = f.metadata_json or {}
+        fact_label = metadata.get("display_name") or f.fact_name
+        scope = f" [{metadata.get('scope')}]" if metadata.get("scope") else ""
+        source_location = f.location_label or (f"P{f.page_number}" if f.page_number else "位置未知")
         fact_lines.append(
-            f"- {f.fact_name}: {f.fact_value}{f.unit or ''} [已确认] "
+            f"- {fact_label}{scope} (key={f.fact_name}): {f.fact_value}{f.unit or ''} [已确认] "
             f"(来源: {f.document.file_name if f.document else '未知'}"
-            f" P{f.page_number or '?'} 原文: {f.source_quote or ''})"
+            f" {source_location} 原文: {f.source_quote or ''})"
         )
 
     sourced_fact_lines = []
-    for f in sourced_facts[:30]:
+    for f in sourced_facts[:60]:
+        metadata = f.metadata_json or {}
+        fact_label = metadata.get("display_name") or f.fact_name
+        scope = f" [{metadata.get('scope')}]" if metadata.get("scope") else ""
+        usage_label = "自动识别可用" if (metadata.get("auto_usable") or float(f.confidence or 0) >= AUTO_USE_THRESHOLD) else "待审核"
+        source_location = f.location_label or (f"P{f.page_number}" if f.page_number else "位置未知")
         sourced_fact_lines.append(
-            f"- {f.fact_name}: {f.fact_value}{f.unit or ''} [待确认但有来源] "
+            f"- {fact_label}{scope} (key={f.fact_name}): {f.fact_value}{f.unit or ''} [{usage_label}且有来源] "
             f"(来源: {f.document.file_name if f.document else '未知'}"
-            f" P{f.page_number or '?'} 原文: {f.source_quote or ''})"
+            f" {source_location} 原文: {f.source_quote or ''})"
         )
 
     scoring_lines = []
@@ -157,6 +459,13 @@ def _build_context(db, project_id: str) -> dict:
             f"- [{idx}] {sp.title}（分值{sp.score or '未标注'}）: {sp.description or ''}"
         )
 
+    from app.services.narration_evidence import evidence_for_generation
+
+    evidence_rows = evidence_for_generation(
+        db,
+        evidence_run_id,
+        auto_approve=evidence_auto_approve,
+    )
     return {
         "project": project,
         "confirmed_facts": confirmed_facts,
@@ -167,12 +476,23 @@ def _build_context(db, project_id: str) -> dict:
         "sourced_fact_lines": sourced_fact_lines,
         "scoring_lines": scoring_lines,
         "document_excerpt_lines": _document_excerpt_lines(db, project_id),
+        "evidence_rows": evidence_rows,
+        "evidence": _evidence_output_from_rows(evidence_rows),
     }
 
 
 def _clean_one_line(text: str | None, limit: int = 220) -> str:
     text = re.sub(r"\s+", " ", text or "").strip()
     return text[:limit]
+
+
+def _predefined_outline(params: dict[str, Any]) -> str:
+    outline = str(params.get("predefined_outline") or "").strip()
+    return outline[:6000] or "（未提供，由AI根据证据编排）"
+
+
+def _target_shot_count(params: dict[str, Any]) -> int:
+    return int(params.get("target_shot_count") or params.get("section_count") or 56)
 
 
 def _project_field_lines(project: Project | None) -> list[str]:
@@ -219,7 +539,13 @@ def _document_excerpt_lines(db, project_id: str, *, max_lines: int = 24) -> list
         text = _clean_one_line(c.content)
         if text and (len(lines) < 6 or keyword_re.search(text)):
             doc_name = c.document.file_name if c.document else "未知文档"
-            loc = c.heading_path or f"P{c.page_start or '?'}"
+            metadata = c.metadata_json or {}
+            page_label = (
+                metadata.get("location_label")
+                if metadata.get("is_virtual_page")
+                else (f"P{c.page_start}" if c.page_start else "P?")
+            ) or "位置未知"
+            loc = f"{page_label} {c.heading_path}" if c.heading_path else page_label
             lines.append(f"- {doc_name} {loc}: {text}")
         if len(lines) >= max_lines:
             return lines
@@ -236,7 +562,8 @@ def _document_excerpt_lines(db, project_id: str, *, max_lines: int = 24) -> list
         text = _clean_one_line(p.cleaned_text or p.markdown_text or p.raw_text)
         if text and (len(lines) < 6 or keyword_re.search(text)):
             doc_name = p.document.file_name if p.document else "未知文档"
-            lines.append(f"- {doc_name} P{p.page_number}: {text}")
+            page_label = p.location_label if (p.metadata_json or {}).get("is_virtual_page") else f"P{p.page_number}"
+            lines.append(f"- {doc_name} {page_label or '位置未知'}: {text}")
         if len(lines) >= max_lines:
             break
     return lines
@@ -245,13 +572,14 @@ def _document_excerpt_lines(db, project_id: str, *, max_lines: int = 24) -> list
 def _build_prompt(params: dict[str, Any], context: dict) -> str:
     """构建严格要求的提示词。"""
     target_duration = int(params.get("target_duration_seconds", 300))
-    section_count = int(params.get("section_count", 10))
+    section_count = _target_shot_count(params)
     tone = params.get("tone", "专业庄重")
     video_purpose = params.get("video_purpose", "投标答辩")
     chars_per_minute = int(params.get("chars_per_minute", 260))
     focus_scoring = params.get("focus_scoring_points") or []
     include_company = params.get("include_company_intro", True)
     include_sim = params.get("include_construction_simulation", True)
+    custom_requirements = _clean_one_line(params.get("custom_requirements"), 1800) or "（无）"
 
     fact_text = "\n".join(context["fact_lines"]) if context["fact_lines"] else "（无已确认事实）"
     sourced_fact_text = "\n".join(context["sourced_fact_lines"]) if context["sourced_fact_lines"] else "（无待确认来源事实）"
@@ -278,12 +606,14 @@ def _build_prompt(params: dict[str, Any], context: dict) -> str:
 - 每分钟参考字数：{chars_per_minute}，每分镜解说约 {per_shot_chars} 字
 - 包含企业介绍：{include_company}；包含施工推演：{include_sim}
 - 重点评分项：{', '.join(focus_scoring) if focus_scoring else '全部'}
+- 本次额外要求：{custom_requirements}
 
 【已确认工程事实（必须引用，不得编造）】
 {fact_text}
 {conflict_text}
 
-【待确认但有明确来源的材料（可用于表达，但必须谨慎措辞，如“拟、约、计划、根据文件显示”，并标为 partial）】
+【台账候选事实（待确认但有明确来源的材料）】
+其中标记“自动识别可用”的高置信度事实可按原文直接引用；标记“待审核”的事实只能谨慎表达（如“根据文件显示、拟、约、计划”），并标为 partial。
 {sourced_fact_text}
 
 【文档原文摘录（用于补足施工方案语境，不得把摘录之外的数字写成确定事实）】
@@ -328,6 +658,504 @@ def _build_prompt(params: dict[str, Any], context: dict) -> str:
     return prompt
 
 
+EVIDENCE_TOPICS = [
+    "项目概况", "总体部署", "工期节点", "平面及垂直运输", "基坑土方", "重点工艺",
+    "钢结构", "机电", "BIM", "质量安全", "绿色施工", "总承包管理",
+]
+
+
+EMPTY_PHRASES = [
+    "标准高", "体系完善", "保驾护航", "赋能发展", "共创未来", "大力推广",
+    "较高要求", "坚实基础", "全面保障", "城市美好未来",
+]
+
+
+def _prompt_materials(context: dict) -> dict[str, str]:
+    evidence = context.get("evidence")
+    return {
+        "facts": "\n".join(context["fact_lines"]) if context["fact_lines"] else "（无已确认事实）",
+        "sourced_facts": "\n".join(context["sourced_fact_lines"]) if context["sourced_fact_lines"] else "（无待确认来源事实）",
+        "excerpts": "\n".join(context["document_excerpt_lines"]) if context["document_excerpt_lines"] else "（无文档摘录）",
+        "scoring": "\n".join(context["scoring_lines"]) if context["scoring_lines"] else "（无评分点）",
+        "evidence": _format_evidence(evidence.evidenceItems, limit=160) if evidence else "（无全文证据）",
+    }
+
+
+def _build_evidence_prompt(params: dict[str, Any], context: dict) -> str:
+    materials = _prompt_materials(context)
+    return f"""你是工程投标视频的资料审查员。只做资料分析，不写解说词。
+
+请阅读下方已上传文件抽取结果，按专题建立证据清单。只能使用材料中出现的事实，不得补写常识、经验或想象内容。
+
+【专题】
+{", ".join(EVIDENCE_TOPICS)}
+
+【已确认工程事实】
+{materials["facts"]}
+
+【台账候选事实（均有明确来源；“自动识别可用”可直接引用，“待审核”只能谨慎表达）】
+{materials["sourced_facts"]}
+
+【文档原文摘录】
+{materials["excerpts"]}
+
+【输出要求】
+1. 每条证据必须包含：原文事实、数字参数、施工动作、前后工序或空间关系、来源文件和页码。
+2. 没有页码或来源的内容，只能作为 partial，不得标为 verified。
+3. 无法支撑写作的空话放入 rejectedFacts。
+4. 当前批次只输出本批次能直接支撑的证据；跨批次去重由系统完成，不得为了凑数量删掉独有数字和工序关系。
+5. 仅输出 JSON，不要写解说词，不要解释。
+
+JSON 结构：
+{{
+  "evidenceItems": [
+    {{
+      "topic": "项目概况",
+      "fact": "原文事实的短句",
+      "parameters": ["面积、工期、楼层等参数"],
+      "constructionActions": ["开挖", "吊装", "穿插施工"],
+      "sequenceContext": "前后工序或空间关系",
+      "sourceReference": {{"documentId": "", "documentName": "", "page": 1, "locationLabel": "P1", "quote": "短引文"}},
+      "factCheckStatus": "verified|partial|unverified|conflict"
+    }}
+  ],
+  "rejectedFacts": ["无法验证或过于空泛的内容"]
+}}"""
+
+
+def _build_outline_prompt(params: dict[str, Any], context: dict, evidence: EvidenceOutput) -> str:
+    target_duration = int(params.get("target_duration_seconds", 540))
+    chars_per_minute = int(params.get("chars_per_minute", 215))
+    target_chars = int(target_duration / 60 * chars_per_minute)
+    target_beats = int(params.get("target_beat_count", 120))
+    include_company = params.get("include_company_intro", False)
+    include_sim = params.get("include_construction_simulation", True)
+    custom_requirements = _clean_one_line(params.get("custom_requirements"), 1800) or "（无）"
+    predefined_outline = _predefined_outline(params)
+    materials = _prompt_materials(context)
+    evidence_text = _format_evidence_for_outline(evidence.evidenceItems)
+    return f"""你是施工组织推演型投标视频的总编导。此阶段只生成章节大纲，不写完整正文。
+
+【视频目标】
+- 目标时长：{target_duration} 秒
+- 目标总字数：约 {target_chars} 字
+- 目标旁白短句：约 {target_beats} 条，后续按句号和分号拆分时间轴
+- 项目介绍：不超过 60 秒
+- 施工方案与施工推演：不少于总时长 70%
+- 结尾：不超过 30 秒
+- 包含企业介绍：{include_company}
+- 包含施工推演：{include_sim}
+- 本次额外要求：{custom_requirements}
+
+【用户预设的章节大纲】
+{predefined_outline}
+
+【全文证据清单（已按批次提取并保留来源）】
+{evidence_text or "（无证据清单）"}
+
+【评分点】
+{materials["scoring"]}
+
+【大纲要求】
+1. 如果提供了用户预设大纲，必须保留其章节顺序和主线，不得擅自换成另一套章节；只能根据证据密度微调章节时长和拆分粒度。
+2. 每章分配时长、目标字数、核心评分点和拟展示画面。
+3. 如果未提供用户预设大纲，必须先根据原文标题、证据专题分布和施工先后关系自动提炼章节；章节数量不固定，不得预设为6章、8章或其他固定数量，但也不能把施工方案压缩成泛泛一章。
+4. 项目介绍不超过60秒，施工组织与工艺推演不少于总时长70%，结尾不超过30秒。
+5. 仅输出 JSON，不写正文。
+
+JSON 结构：
+{{
+  "totalDurationSeconds": {target_duration},
+  "targetCharacters": {target_chars},
+  "chapters": [
+    {{
+      "sequence": 1,
+      "title": "项目概况",
+      "durationSeconds": 45,
+      "targetCharacters": 160,
+      "writingGoal": "本章要让评委确认项目边界和关键参数",
+      "scoringFocus": ["评分点名称"],
+      "visualPlan": "BIM 总览、区位、指标标注",
+      "evidenceIndexes": [0, 1],
+      "evidenceIds": ["证据数据库ID"]
+    }}
+  ]
+}}"""
+
+
+def _build_chapter_prompt(
+    params: dict[str, Any],
+    context: dict,
+    chapter: OutlineChapter,
+    evidence: EvidenceOutput,
+    *,
+    shot_start: int,
+    shot_budget: int,
+) -> str:
+    materials = _prompt_materials(context)
+    evidence_text = _format_evidence_by_indexes(evidence.evidenceItems, chapter.evidenceIndexes, chapter.evidenceIds)
+    predefined_outline = _predefined_outline(params)
+    banned = "、".join(EMPTY_PHRASES)
+    shot_count = max(1, shot_budget)
+    target_beats = max(1, round(int(params.get("target_beat_count", 120)) * float(chapter.durationSeconds) / max(1, int(params.get("target_duration_seconds", 540)))))
+    per_shot = max(35, int(chapter.targetCharacters / shot_count))
+    custom_requirements = _clean_one_line(params.get("custom_requirements"), 1800) or "（无）"
+    return f"""你是资深施工组织方案解说词撰稿人。请只写本章，不要写其它章节。
+
+【本章大纲】
+- 章节：{chapter.title}
+- 时长：{chapter.durationSeconds} 秒
+- 目标字数：约 {chapter.targetCharacters} 字
+- 分镜数量：{shot_count} 个
+- 本章旁白短句目标：约 {target_beats} 条
+- 本章写作目标：{chapter.writingGoal}
+- 拟展示画面：{chapter.visualPlan}
+- 每个分镜约 {per_shot} 字
+- 分镜序号从 {shot_start} 开始
+- 本次额外要求：{custom_requirements}
+
+【全局预设大纲】
+{predefined_outline}
+
+【本章证据】
+{evidence_text or "（本章没有明确证据，只能写组织逻辑，不得写具体数字）"}
+
+【全局已确认事实】
+{materials["facts"]}
+
+【台账候选事实（“自动识别可用”可直接引用，“待审核”只能谨慎表达）】
+{materials["sourced_facts"]}
+
+【写作硬规则】
+1. 语言专业、克制、具体，重点讲清施工对象、数量参数、作业顺序、穿插关系和控制结果。
+2. 每句话 8 至 26 个汉字左右，适合配音和画面切换。
+3. 每 2 至 3 句话至少出现一个具体工序、参数、设备或空间关系。
+4. 禁止使用：{banned}。
+5. 不得编造标书中没有的数字、日期、奖项、设备型号和施工方法。
+6. 涉及标记为“待审核”的材料时，用“根据文件显示、计划、拟、约”等谨慎措辞，并标为 partial；“自动识别可用”材料可直接引用，但不得改写数值或范围。
+7. 每个分镜必须返回 evidenceIds，且只能使用本章证据中的真实ID；sourceReferences必须与这些证据对应。
+8. 没有证据支撑的内容不要写成确定事实，放入 unverifiedFacts。
+9. 仅输出 JSON。
+
+JSON 结构：
+{{
+  "shots": [
+    {{
+      "sequence": {shot_start},
+      "title": "6-14字标题",
+      "section": "{chapter.title}",
+      "narration": "本分镜解说词，包含短句，可由2-5句组成。",
+      "durationSeconds": 20,
+      "visualType": "title|model_image|site_photo|generated_image|generated_video|bim_animation|infographic",
+      "visualDescription": "画面内容",
+      "imagePrompt": "图片提示词",
+      "videoPrompt": "视频提示词",
+      "keywords": ["关键词"],
+      "scoringPointIds": [0],
+      "evidenceIds": ["本分镜使用的证据数据库ID"],
+      "sourceReferences": [{{"documentId": "", "documentName": "", "page": 1, "locationLabel": "P1", "quote": ""}}],
+      "factCheckStatus": "verified|partial|unverified|conflict"
+    }}
+  ],
+  "unverifiedFacts": []
+}}"""
+
+
+def _build_qa_prompt(
+    params: dict[str, Any],
+    context: dict,
+    outline: OutlineOutput,
+    draft: NarrationOutput,
+) -> str:
+    target_duration = int(params.get("target_duration_seconds", 540))
+    section_count = int(params.get("section_count", 24))
+    banned = "、".join(EMPTY_PHRASES)
+    materials = _prompt_materials(context)
+    custom_requirements = _clean_one_line(params.get("custom_requirements"), 1800) or "（无）"
+    draft_json = draft.model_dump_json(exclude_none=True)
+    outline_json = outline.model_dump_json(exclude_none=True)
+    return f"""你是另一个独立终审 agent。请审查并修订整条投标视频解说词。
+
+【终审依据】
+已确认事实：
+{materials["facts"]}
+
+台账候选事实（“自动识别可用”可直接引用，“待审核”只能谨慎表达）：
+{materials["sourced_facts"]}
+
+大纲：
+{outline_json}
+
+待审全文 JSON：
+{draft_json}
+
+本次额外要求：{custom_requirements}
+
+【审查任务】
+1. 检查事实来源、数字一致性、工序先后、章节衔接、重复句式和口号化表达。
+2. 删除或改写无法验证的确定性表述，无法验证内容放入 unverifiedFacts。
+3. 禁止保留这些空泛表达：{banned}。
+4. 维持总时长约 {target_duration} 秒，分镜数量不超过 {section_count} 个。
+5. 输出必须仍是完整 NarrationOutput JSON，可直接入库。
+
+JSON 结构与原文一致：
+{{
+  "projectSummary": "一句话项目摘要",
+  "totalDurationSeconds": {target_duration},
+  "totalNarrationCharacters": 总字数,
+  "unverifiedFacts": ["无法验证的内容"],
+  "shots": [...]
+}}"""
+
+
+def _build_qa_review_prompt(
+    params: dict[str, Any],
+    context: dict,
+    outline: OutlineOutput,
+    draft: NarrationOutput,
+) -> str:
+    materials = _prompt_materials(context)
+    return f"""你是独立的工程投标文案终审 agent。只做审查，不重写整篇文案。
+
+【审查依据】
+已批准证据：
+{materials["evidence"]}
+
+章节大纲：
+{outline.model_dump_json(exclude_none=True)}
+
+待审分镜：
+{draft.model_dump_json(exclude_none=True)}
+
+请检查：数字、日期、设备型号、施工方法是否能被来源支撑；工序先后和空间关系是否矛盾；项目介绍、施工推演、结尾的时长比例；重复句式、口号化表达和无法验证的确定性内容。
+不得生成整篇 JSON，只返回问题列表，以及确实需要修改的局部补丁。没有问题时 issues 和 patches 返回空数组。
+
+JSON格式：
+{{
+  "issues": ["问题描述，指出分镜序号和原因"],
+  "unsupportedFacts": ["无法验证的事实"],
+  "patches": [
+    {{"sequence": 1, "narration": "局部修订后的旁白", "factCheckStatus": "verified|partial|unverified|conflict", "reason": "修改原因"}}
+  ]
+}}"""
+
+
+def _format_ref(ref: SourceRef) -> str:
+    page = f"P{ref.page}" if ref.page else "P?"
+    doc = ref.documentName or ref.documentId or "未知文档"
+    quote = f" 原文: {ref.quote}" if ref.quote else ""
+    return f"{doc} {page}{quote}"
+
+
+def _format_evidence(items: list[EvidenceItem], *, limit: int = 160) -> str:
+    lines: list[str] = []
+    for idx, item in enumerate(items[:limit]):
+        params = "；".join(item.parameters) if item.parameters else "无参数"
+        actions = "；".join(item.constructionActions) if item.constructionActions else "无动作"
+        evidence_key = f" id:{item.evidenceId}" if item.evidenceId else ""
+        lines.append(
+            f"[{idx}]{evidence_key} {item.topic}｜事实：{item.fact}｜参数：{params}｜动作：{actions}｜"
+            f"工序/关系：{item.sequenceContext or '无'}｜来源：{_format_ref(item.sourceReference)}｜"
+            f"状态：{item.factCheckStatus}"
+        )
+    return "\n".join(lines)
+
+
+def _format_evidence_for_outline(items: list[EvidenceItem], *, max_per_topic: int = 8) -> str:
+    """给大纲阶段提供均衡、紧凑的证据索引，避免把数千条证据一次性喂入模型。"""
+    topic_counts: dict[str, int] = {}
+    selected: list[tuple[int, EvidenceItem]] = []
+    for index, item in enumerate(items):
+        topic = item.topic or "项目概况"
+        if topic_counts.get(topic, 0) >= max_per_topic:
+            continue
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        selected.append((index, item))
+
+    lines: list[str] = []
+    for index, item in selected:
+        params = _clean_one_line("；".join(item.parameters), 80) or "无"
+        actions = _clean_one_line("；".join(item.constructionActions), 60) or "无"
+        sequence = _clean_one_line(item.sequenceContext, 100) or "无"
+        source = _clean_one_line(_format_ref(item.sourceReference), 100)
+        fact = _clean_one_line(item.fact, 140)
+        evidence_key = f" id:{item.evidenceId}" if item.evidenceId else ""
+        lines.append(
+            f"[{index}]{evidence_key} {item.topic}｜事实：{fact}｜参数：{params}｜"
+            f"动作：{actions}｜工序：{sequence}｜来源：{source}"
+        )
+    return "\n".join(lines)
+
+
+def _format_evidence_by_indexes(items: list[EvidenceItem], indexes: list[int], evidence_ids: list[str] | None = None) -> str:
+    selected: list[EvidenceItem] = []
+    seen: set[int] = set()
+    id_set = set(evidence_ids or [])
+    if id_set:
+        selected.extend(item for item in items if item.evidenceId in id_set)
+    selected_keys = {item.evidenceId or str(id(item)) for item in selected}
+    for idx in indexes:
+        if 0 <= idx < len(items) and idx not in seen:
+            candidate = items[idx]
+            key = candidate.evidenceId or str(id(candidate))
+            if key not in selected_keys:
+                selected.append(candidate)
+                selected_keys.add(key)
+            seen.add(idx)
+    if not selected:
+        selected = items[:10]
+    return _format_evidence(selected, limit=80)
+
+
+def _fallback_evidence(context: dict) -> EvidenceOutput:
+    """LLM 证据抽取失败时，把现有事实和摘录转为证据，保证多阶段可继续。"""
+    items: list[EvidenceItem] = []
+    for f in context["confirmed_facts"][:50] + context["sourced_facts"][:30]:
+        metadata = f.metadata_json or {}
+        from app.services.fact_extractor import FACT_TYPE_LABELS
+
+        fact_label = metadata.get("display_name") or FACT_TYPE_LABELS.get(f.fact_name) or "待识别数字"
+        scope = f"（{metadata['scope']}）" if metadata.get("scope") else ""
+        ref = SourceRef(
+            documentId=f.document_id or "",
+            documentName=f.document.file_name if f.document else "",
+            page=f.page_number,
+            locationLabel=f.location_label or (f"P{f.page_number}" if f.page_number else None),
+            quote=_clean_one_line(f.source_quote, 120),
+        )
+        status: FactCheckStatus = "verified" if f.verification_status == "confirmed" else "partial"
+        items.append(
+            EvidenceItem(
+                topic=_guess_topic(f"{fact_label} {f.fact_value} {f.source_quote}"),
+                fact=f"{fact_label}{scope}: {f.fact_value}{f.unit or ''}",
+                parameters=[f"{f.fact_value}{f.unit or ''}"] if f.fact_value else [],
+                constructionActions=_extract_actions(f"{fact_label} {f.source_quote}"),
+                sequenceContext="",
+                sourceReference=ref,
+                factCheckStatus=status,
+            )
+        )
+    for line in context["document_excerpt_lines"][:24]:
+        page_match = re.search(r"\sP(\d+)(?:\s|:)", line)
+        page = int(page_match.group(1)) if page_match else None
+        document_name = line[2:page_match.start()].strip() if page_match else "文档摘录"
+        quote = line.split(": ", 1)[1] if ": " in line else line
+        items.append(
+            EvidenceItem(
+                topic=_guess_topic(line),
+                fact=line,
+                constructionActions=_extract_actions(line),
+                sourceReference=SourceRef(documentName=document_name, page=page, locationLabel=f"P{page}" if page else None, quote=_clean_one_line(quote, 120)),
+                factCheckStatus="partial",
+            )
+        )
+    return EvidenceOutput(evidenceItems=items, rejectedFacts=[])
+
+
+def _guess_topic(text: str) -> str:
+    topic_keywords = [
+        ("工期节点", "工期|节点|进度|竣工|开工"),
+        ("平面及垂直运输", "总平面|塔吊|施工电梯|运输|堆场|道路"),
+        ("基坑土方", "基坑|土方|开挖|支护|降水"),
+        ("钢结构", "钢结构|钢梁|钢柱|吊装|焊接"),
+        ("机电", "机电|管线|暖通|给排水|电气|消防"),
+        ("BIM", "BIM|模型|碰撞|管综"),
+        ("质量安全", "质量|安全|文明施工|创优"),
+        ("绿色施工", "绿色|节能|环保|扬尘|噪声"),
+        ("总承包管理", "总承包|协调|分包|管理"),
+        ("总体部署", "部署|流水|穿插|施工段"),
+    ]
+    for topic, pattern in topic_keywords:
+        if re.search(pattern, text, flags=re.I):
+            return topic
+    return "项目概况"
+
+
+def _extract_actions(text: str) -> list[str]:
+    actions = re.findall(r"(开挖|支护|降水|浇筑|吊装|安装|焊接|穿插|运输|堆放|验收|调试|封闭|回填)", text)
+    return list(dict.fromkeys(actions))[:6]
+
+
+def _allocate_shot_budgets(outline: OutlineOutput, total_shots: int) -> list[int]:
+    chapters = outline.chapters
+    if not chapters:
+        return []
+    budgets = [1 for _ in chapters]
+    remaining = max(0, total_shots - len(chapters))
+    total_duration = sum(float(c.durationSeconds or 0) for c in chapters) or len(chapters)
+    raw = [remaining * (float(c.durationSeconds or 0) / total_duration) for c in chapters]
+    for idx, value in sorted(enumerate(raw), key=lambda pair: pair[1], reverse=True):
+        add = int(value)
+        budgets[idx] += add
+        remaining -= add
+    idx = 0
+    while remaining > 0:
+        budgets[idx % len(budgets)] += 1
+        remaining -= 1
+        idx += 1
+    return budgets
+
+
+def _merge_chapter_drafts(
+    params: dict[str, Any],
+    context: dict,
+    outline: OutlineOutput,
+    drafts: list[ChapterDraftOutput],
+) -> NarrationOutput:
+    shots: list[ShotOut] = []
+    unverified: list[str] = []
+    sequence = 1
+    for draft in drafts:
+        unverified.extend(draft.unverifiedFacts)
+        for shot in draft.shots:
+            data = shot.model_dump()
+            data["sequence"] = sequence
+            shots.append(ShotOut.model_validate(data))
+            sequence += 1
+
+    target_duration = int(params.get("target_duration_seconds", outline.totalDurationSeconds or 540))
+    if shots:
+        chars_per_minute = max(120, int(params.get("chars_per_minute", 215)))
+        natural_durations = [
+            max(
+                1.5,
+                len(re.sub(r"\s+", "", shot.narration or "")) / chars_per_minute * 60
+                + len(re.findall(r"[。！？；]", shot.narration or "")) * 0.18,
+            )
+            for shot in shots
+        ]
+        current_duration = sum(natural_durations) or 1
+        ratio = target_duration / current_duration
+        for shot, natural_duration in zip(shots, natural_durations):
+            shot.durationSeconds = max(1.5, round(natural_duration * ratio, 1))
+
+    return NarrationOutput(
+        projectSummary=_project_summary(context),
+        totalDurationSeconds=target_duration,
+        totalNarrationCharacters=sum(len(s.narration or "") for s in shots),
+        unverifiedFacts=list(dict.fromkeys(unverified)),
+        shots=shots,
+    )
+
+
+def _project_summary(context: dict) -> str:
+    project = context.get("project")
+    if project and project.name:
+        return f"{project.name}施工组织推演型投标视频。"
+    return "施工组织推演型投标视频。"
+
+
+def _lint_narration_output(output: NarrationOutput) -> None:
+    """保守清理口号化短语，避免终审漏掉显眼问题。"""
+    for shot in output.shots:
+        text = shot.narration or ""
+        for phrase in EMPTY_PHRASES:
+            text = text.replace(phrase, "")
+        text = re.sub(r"[，,；;]\s*[，,；;]+", "，", text)
+        cleaned = re.sub(r"\s+", "", text).strip("，；。")
+        shot.narration = cleaned + ("。" if cleaned and not cleaned.endswith(("。", "！", "？")) else "")
+
+
 # ============================================================
 # 主流程
 # ============================================================
@@ -368,6 +1196,11 @@ def _map_refs(db, shot: ShotOut, project_id: str | None = None) -> list[dict]:
             mapped = project_docs.get(ref.documentId) or project_docs.get("all")
             if mapped:
                 doc_id = mapped.id
+            else:
+                # 没有真实文档时，不能保留 "tender" 这类看似有效的假引用。
+                continue
+        elif not db.get(SourceDocument, doc_id):
+            continue
         doc_name = ref.documentName or _get_document_name(db, doc_id)
         refs.append(
             {
@@ -381,102 +1214,778 @@ def _map_refs(db, shot: ShotOut, project_id: str | None = None) -> list[dict]:
     return refs
 
 
-def generate_storyboard(params: dict[str, Any]) -> dict[str, Any]:
-    """生成完整分镜并写入数据库。"""
-    project_id = params["project_id"]
-    section_count = int(params.get("section_count", 10))
+def _fallback_outline(params: dict[str, Any], evidence: EvidenceOutput) -> OutlineOutput:
+    target = int(params.get("target_duration_seconds", 540))
+    cpm = int(params.get("chars_per_minute", 215))
+    specs = [
+        ("项目概况", .08, "交代项目边界与已核实参数"), ("总体部署", .11, "说明分区、资源与流水组织"),
+        ("工期节点", .12, "说明关键节点及前后衔接"), ("平面与垂直运输", .12, "说明道路、堆场与运输组织"),
+        ("基础与关键工艺", .20, "说明土方、基础及重点工艺的作业顺序"), ("主体与专业穿插", .16, "说明主体、机电与装饰的穿插关系"),
+        ("BIM质量安全管理", .16, "说明BIM协同、质量安全和绿色施工控制"), ("履约收束", .05, "收束履约目标，不扩写未验证承诺"),
+    ]
+    chapters = [OutlineChapter(sequence=i, title=title, durationSeconds=max(15, round(target * weight)), targetCharacters=max(60, round(target * weight / 60 * cpm)), writingGoal=goal, visualPlan="对应施工区域、工序关系与控制要点的BIM或现场画面") for i, (title, weight, goal) in enumerate(specs, 1)]
+    return OutlineOutput(totalDurationSeconds=target, targetCharacters=round(target / 60 * cpm), chapters=chapters)
 
+
+def _is_fact_bearing_text(text: str) -> bool:
+    return bool(re.search(r"\d|工期|面积|楼层|高度|塔吊|施工电梯|基坑|土方|钢结构|机电|BIM|混凝土|吊装|浇筑|开挖|回填", text or ""))
+
+
+def _match_evidence_ids(shot: ShotOut, rows: list[NarrationEvidence]) -> list[str]:
+    haystack = " ".join(
+        [shot.title or "", shot.section or "", shot.narration or ""]
+        + list(shot.keywords or [])
+        + [ref.quote or "" for ref in shot.sourceReferences]
+        + [ref.documentName or "" for ref in shot.sourceReferences]
+    )
+    matches: list[str] = []
+    generic_terms = {
+        "本工程", "项目概况", "施工内容", "主要施工内容", "施工组织", "施工方案",
+        "施工安排", "施工阶段", "工程施工", "相关工程", "施工管理", "质量控制",
+    }
+    for row in rows:
+        reference = row.source_reference or {}
+        quote = str(reference.get("quote") or "").strip()
+        if quote and len(quote) <= 100 and quote in haystack:
+            matches.append(row.id)
+            continue
+        technical_terms = re.findall(
+            r"清水混凝土|PC结构|钢结构|基坑|土方|吊装|机电|BIM|塔吊|施工电梯|"
+            r"支护|降水|回填|网壳|核心筒|外框架|混凝土|幕墙|管综",
+            row.fact or "",
+        )
+        numeric_terms = re.findall(r"\d+(?:\.\d+)?", row.fact or "")
+        fact_terms = list(dict.fromkeys(
+            term for term in technical_terms + numeric_terms if term not in generic_terms
+        ))
+        if fact_terms and sum(term in haystack for term in fact_terms) >= max(1, min(2, len(fact_terms))):
+            matches.append(row.id)
+    return matches[:8]
+
+
+def _evidence_refs_for_shot(
+    shot: ShotOut,
+    rows: list[NarrationEvidence],
+    *,
+    limit: int = 3,
+) -> list[SourceRef]:
+    """把分章证据ID映射成真实来源，防止模型漏填 sourceReferences。"""
+    explicit_ids = [evidence_id for evidence_id in shot.evidenceIds if evidence_id]
+    matched_ids = _match_evidence_ids(shot, rows)
+    wanted = list(dict.fromkeys(explicit_ids + matched_ids))[:limit]
+    by_id = {row.id: row for row in rows}
+    refs: list[SourceRef] = []
+    for evidence_id in wanted:
+        row = by_id.get(evidence_id)
+        if not row:
+            continue
+        refs.append(_source_ref_from_row(row))
+    return refs
+
+
+def _grounded_fallback_narration(shot: ShotOut, rows: list[NarrationEvidence]) -> str:
+    """仅在模型完全漏掉引用时，用匹配到的原文事实生成可追溯的短句。"""
+    matched_ids = _match_evidence_ids(shot, rows)
+    by_id = {row.id: row for row in rows}
+    selected = [by_id[evidence_id] for evidence_id in matched_ids[:2] if evidence_id in by_id]
+    if not selected:
+        return f"本章围绕{shot.section or shot.title or '施工组织'}展开施工推演。"
+    parts: list[str] = []
+    for row in selected:
+        fact = _clean_one_line(row.fact, 120)
+        relation = _clean_one_line(row.sequence_context, 80)
+        parts.append(fact + (f"；{relation}" if relation and relation != "无" else ""))
+    return "。".join(parts).rstrip("。；") + "。"
+
+
+def _split_narration_beats(text: str) -> list[str]:
+    parts = [part.strip() for part in re.split(r"(?<=[。！？；;])", text or "") if part.strip()]
+    return parts or ([text.strip()] if text and text.strip() else [])
+
+
+def _create_narration_beats(db, project_id: str, shots: list[StoryboardShot], evidence_rows: list[NarrationEvidence], cpm: int) -> int:
+    db.query(NarrationBeat).filter(NarrationBeat.project_id == project_id).delete(synchronize_session=False)
+    sequence = 1
+    timeline = 0.0
+    for shot in shots:
+        parts = _split_narration_beats(shot.narration or "")
+        if not parts:
+            continue
+        weights = [max(1.0, len(re.sub(r"\s+", "", part))) for part in parts]
+        total_weight = sum(weights) or 1.0
+        shot_duration = max(0.1, float(shot.duration_seconds or 0))
+        shot_refs = [SourceRef.model_validate(ref) for ref in (shot.source_references or [])]
+        shot_evidence_ids = _match_evidence_ids(
+            ShotOut(
+                sequence=shot.sequence,
+                title=shot.title or "",
+                section=shot.section or "",
+                narration=shot.narration or "",
+                durationSeconds=shot.duration_seconds or 1,
+                visualType=shot.visual_type or "generated_image",
+                visualDescription=shot.visual_description or "",
+                imagePrompt=shot.image_prompt or "",
+                videoPrompt=shot.video_prompt or "",
+                keywords=list(shot.keywords or []),
+                scoringPointIds=[],
+                sourceReferences=shot_refs,
+                factCheckStatus=shot.fact_check_status or "unverified",
+            ),
+            evidence_rows,
+        )
+        current = timeline
+        for index, (part, weight) in enumerate(zip(parts, weights), start=1):
+            duration = shot_duration * weight / total_weight
+            end = timeline + duration
+            if index == len(parts):
+                end = current + shot_duration
+            db.add(
+                NarrationBeat(
+                    project_id=project_id,
+                    shot_id=shot.id,
+                    sequence=sequence,
+                    shot_sequence=shot.sequence,
+                    narration=part,
+                    start_time=round(timeline, 3),
+                    end_time=round(end, 3),
+                    evidence_ids=shot_evidence_ids,
+                    source_references=shot.source_references or [],
+                    fact_check_status=shot.fact_check_status or "unverified",
+                    status="ai_done",
+                )
+            )
+            sequence += 1
+            timeline = end
+    return sequence - 1
+
+
+def rebuild_project_narration_beats(db, project_id: str, cpm: int = 215) -> int:
+    """旁白被人工修改后，按当前分镜重新计算字幕节拍。"""
+    shots = (
+        db.query(StoryboardShot)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
+        .order_by(StoryboardShot.sequence.asc())
+        .all()
+    )
+    count = _create_narration_beats(db, project_id, shots, [], cpm)
+    return count
+
+
+def _resegment_identity(text: str) -> str:
+    """比较正文时忽略空白和标点，防止模型只调整断句就被误判。"""
+    return re.sub(r"[\s，。！？；：、“”‘’（）()【】《》,.!?;:…\-—_]+", "", text or "")
+
+
+def _infer_source_sequences(text: str, shots: list[StoryboardShot], cursor: int) -> tuple[list[int], int]:
+    combined = "".join(_resegment_identity(shot.narration or "") for shot in shots)
+    target = _resegment_identity(text)
+    if not target:
+        return [], cursor
+    start = combined.find(target, cursor)
+    if start < 0:
+        raise ValueError("AI 重新分镜没有保留原正文，未应用本次调整")
+    end = start + len(target)
+    ranges: list[int] = []
+    offset = 0
+    for shot in shots:
+        next_offset = offset + len(_resegment_identity(shot.narration or ""))
+        if start < next_offset and end > offset:
+            ranges.append(shot.sequence)
+        offset = next_offset
+    return ranges, end
+
+
+def resegment_storyboard(params: dict[str, Any]) -> dict[str, Any]:
+    """根据现有正文重新划分镜头，严格禁止模型新增或删改事实文本。"""
+    from app.services.ai_configuration import refresh_runtime_config_from_db
+
+    refresh_runtime_config_from_db()
+    project_id = params["project_id"]
     db = SessionLocal()
     try:
-        context = _build_context(db, project_id)
-        prompt = _build_prompt(params, context)
-
+        shots = (
+            db.query(StoryboardShot)
+            .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
+            .order_by(StoryboardShot.sequence.asc())
+            .all()
+        )
+        if not shots:
+            raise RuntimeError("当前没有可重新分镜的正文")
         adapter = get_llm_adapter()
         if not adapter.is_available():
             raise RuntimeError("LLM 服务不可用，请检查配置。")
 
-        # 投标解说词包含 10+ 个结构化分镜，2000 token 容易截断 JSON。
-        # DeepSeek V4 Flash 与 OpenAI 兼容接口均支持 json_object 输出。
-        raw = adapter.complete(
-            prompt,
-            temperature=0.2,
-            max_tokens=8000,
-            response_format={"type": "json_object"},
+        source = [
+            {
+                "sequence": shot.sequence,
+                "title": shot.title or "",
+                "section": shot.section or "",
+                "narration": shot.narration or "",
+                "durationSeconds": float(shot.duration_seconds or 1),
+                "visualType": shot.visual_type or "generated_image",
+                "visualDescription": shot.visual_description or "",
+            }
+            for shot in shots
+        ]
+        prompt = (
+            "你是工程投标视频的分镜编辑。请只对现有解说词重新划分镜头，不要重写正文。\n"
+            f"目标镜头数量：{int(params.get('target_shot_count', len(shots)))}\n"
+            f"补充要求：{params.get('instructions') or '无'}\n\n"
+            "硬性要求：\n"
+            "1. 输出的 narration 必须逐字来自输入正文，只允许调整镜头边界和标点断句。\n"
+            "2. 不得新增、删减、改写任何事实、数字、日期、型号、工序或结论。\n"
+            "3. 每个输出镜头必须填写 sourceShotSequences，表示它由哪些原镜头组成。\n"
+            "4. 可以合并或拆分镜头；标题、章节、画面描述可以重排，但不能写入正文没有的事实。\n"
+            "5. 只输出合法 JSON，不要 Markdown 或解释。结构："
+            '{"shots":[{"sequence":1,"title":"","section":"","narration":"",'
+            '"durationSeconds":10,"visualType":"generated_image","visualDescription":"",'
+            '"sourceShotSequences":[1]}]}\n\n'
+            f"现有分镜：{json.dumps(source, ensure_ascii=False)}"
         )
-        parsed = parse_narration_output(raw)
+        parsed = _complete_structured(
+            adapter,
+            prompt,
+            parse_resegment_output,
+            stage="resegment",
+            max_tokens=6000,
+            temperature=0,
+        )
+        target_shots = parsed.shots[: int(params.get("target_shot_count", len(shots)))]
+        if not target_shots:
+            raise ValueError("AI 没有返回可用分镜")
 
-        # 删除旧分镜（重新生成）
-        db.query(StoryboardShot).filter(StoryboardShot.project_id == project_id).delete()
+        original_identity = _resegment_identity("".join(shot.narration or "" for shot in shots))
+        generated_identity = _resegment_identity("".join(shot.narration or "" for shot in target_shots))
+        if original_identity != generated_identity:
+            raise ValueError("AI 重新分镜未完整保留原正文，本次调整未应用")
+
+        old_by_sequence = {shot.sequence: shot for shot in shots}
+        cursor = 0
+        prepared: list[tuple[ResegmentShot, list[int]]] = []
+        for item in target_shots:
+            supplied = [seq for seq in item.sourceShotSequences if seq in old_by_sequence]
+            inferred, cursor = _infer_source_sequences(item.narration, shots, cursor)
+            source_sequences = supplied or inferred
+            if not source_sequences:
+                raise ValueError(f"第{item.sequence}个新分镜缺少原镜头来源")
+            prepared.append((item, list(dict.fromkeys(source_sequences))))
+
+        total_duration = sum(float(shot.duration_seconds or 0) for shot in shots)
+        if total_duration <= 0:
+            total_duration = max(1.0, sum(len(shot.narration or "") for shot in shots) / max(1, int(params.get("chars_per_minute", 215))) * 60)
+        weights = [max(1, len(_resegment_identity(item.narration))) for item, _ in prepared]
+        weight_total = sum(weights) or 1
+        result_shots: list[StoryboardShot] = []
+        used_existing_ids: set[str] = set()
+
+        def merged_metadata(source_sequences: list[int]) -> tuple[list, list, str, str, str]:
+            refs: list = []
+            scoring: list = []
+            statuses: list[str] = []
+            for sequence in source_sequences:
+                source_shot = old_by_sequence[sequence]
+                for ref in source_shot.source_references or []:
+                    if ref not in refs:
+                        refs.append(ref)
+                for score_id in source_shot.scoring_point_ids or []:
+                    if score_id not in scoring:
+                        scoring.append(score_id)
+                if source_shot.fact_check_status:
+                    statuses.append(source_shot.fact_check_status)
+            if "conflict" in statuses:
+                status = "conflict"
+            elif statuses and all(value == "verified" for value in statuses):
+                status = "verified"
+            elif statuses:
+                status = "partial"
+            else:
+                status = "unverified"
+            first = old_by_sequence[source_sequences[0]]
+            return refs, scoring, status, first.section or "", first.title or ""
+
+        for index, (item, source_sequences) in enumerate(prepared, start=1):
+            refs, scoring, status, fallback_section, fallback_title = merged_metadata(source_sequences)
+            duration = max(1.0, total_duration * weights[index - 1] / weight_total)
+            existing = next(
+                (
+                    old_by_sequence[sequence]
+                    for sequence in source_sequences
+                    if sequence in old_by_sequence and old_by_sequence[sequence].id not in used_existing_ids
+                ),
+                None,
+            )
+            if existing is None:
+                existing = next((shot for shot in shots if shot.id not in used_existing_ids), None)
+            title = item.title or fallback_title or f"第{index}段"
+            section = item.section or fallback_section
+            if existing:
+                used_existing_ids.add(existing.id)
+                old_narration = existing.narration or ""
+                if old_narration != item.narration:
+                    versions = list(existing.versions or [])
+                    revision = max([v.get("revision", 0) for v in versions] + [0]) + 1
+                    versions.append(
+                        {
+                            "revision": revision,
+                            "narration": item.narration,
+                            "visual_prompt": item.visualDescription or existing.visual_prompt,
+                            "visual_type": item.visualType,
+                            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "source": "ai_resegment",
+                        }
+                    )
+                    existing.versions = versions
+                    from app.services.voice_service import mark_shot_narration_changed
+
+                    mark_shot_narration_changed(db, existing, old_narration, item.narration)
+                existing.sequence = index
+                existing.title = title
+                existing.section = section
+                existing.narration = item.narration
+                existing.duration_seconds = duration
+                existing.visual_type = item.visualType
+                existing.visual_description = item.visualDescription
+                existing.visual_prompt = item.visualDescription or existing.visual_prompt
+                existing.source_references = refs
+                existing.scoring_point_ids = scoring
+                existing.fact_check_status = status
+                existing.status = "edited"
+                result_shots.append(existing)
+            else:
+                created = StoryboardShot(
+                    project_id=project_id,
+                    sequence=index,
+                    title=title,
+                    section=section,
+                    narration=item.narration,
+                    duration_seconds=duration,
+                    visual_type=item.visualType,
+                    visual_description=item.visualDescription,
+                    visual_prompt=item.visualDescription,
+                    source_references=refs,
+                    scoring_point_ids=scoring,
+                    fact_check_status=status,
+                    status="ai_done",
+                    versions=[
+                        {
+                            "revision": 1,
+                            "narration": item.narration,
+                            "visual_prompt": item.visualDescription,
+                            "visual_type": item.visualType,
+                            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "source": "ai_resegment",
+                        }
+                    ],
+                )
+                db.add(created)
+                result_shots.append(created)
+
+        for old_shot in shots:
+            if old_shot.id not in used_existing_ids:
+                db.delete(old_shot)
         db.flush()
+        beat_count = _create_narration_beats(db, project_id, result_shots, [], int(params.get("chars_per_minute", 215)))
+        db.commit()
+        return {
+            "shot_count": len(result_shots),
+            "beat_count": beat_count,
+            "total_duration_seconds": round(sum(float(shot.duration_seconds or 0) for shot in result_shots), 1),
+            "total_narration_characters": sum(len(shot.narration or "") for shot in result_shots),
+            "status": "success",
+        }
+    finally:
+        db.close()
 
-        created: list[StoryboardShot] = []
-        scoring_points = context["scoring_points"]
-        for i, shot_data in enumerate(parsed.shots[:section_count], start=1):
-            # 映射评分点 id
-            scoring_ids = []
-            for idx in shot_data.scoringPointIds:
-                if 0 <= idx < len(scoring_points):
-                    scoring_ids.append(scoring_points[idx].id)
 
-            refs = _map_refs(db, shot_data, project_id)
-            shot = StoryboardShot(
-                project_id=project_id,
-                sequence=i,
+def _quality_report(parsed: NarrationOutput, params: dict[str, Any], evidence_rows: list[NarrationEvidence], beat_count: int) -> dict[str, Any]:
+    fact_shots = [shot for shot in parsed.shots if _is_fact_bearing_text(shot.narration)]
+    cited_shots = [shot for shot in fact_shots if shot.sourceReferences]
+    banned_hits = sorted({phrase for shot in parsed.shots for phrase in EMPTY_PHRASES if phrase in (shot.narration or "")})
+    target_duration = float(params.get("target_duration_seconds", 540))
+    actual_duration = sum(float(shot.durationSeconds or 0) for shot in parsed.shots)
+    construction_chars = sum(
+        len(shot.narration or "")
+        for shot in parsed.shots
+        if not re.search(r"片头|项目概况|履约|片尾|结尾", shot.section or shot.title or "")
+    )
+    total_chars = sum(len(shot.narration or "") for shot in parsed.shots) or 1
+    return {
+        "evidence_count": len(evidence_rows),
+        "beat_count": beat_count,
+        "target_beat_count": int(params.get("target_beat_count", 120)),
+        "beat_count_gap": beat_count - int(params.get("target_beat_count", 120)),
+        "fact_shot_count": len(fact_shots),
+        "cited_fact_shot_count": len(cited_shots),
+        "fact_reference_rate": round(len(cited_shots) / len(fact_shots), 4) if fact_shots else 1.0,
+        "construction_content_ratio": round(construction_chars / total_chars, 4),
+        "target_duration_seconds": target_duration,
+        "actual_duration_seconds": round(actual_duration, 2),
+        "duration_gap_seconds": round(target_duration - actual_duration, 2),
+        "banned_phrases": banned_hits,
+        "unverified_facts": list(parsed.unverifiedFacts),
+    }
+
+
+def _persist_storyboard_output(db, params: dict[str, Any], context: dict, parsed: NarrationOutput, *, source: str) -> dict[str, Any]:
+    project_id = params["project_id"]
+    db.query(NarrationBeat).filter(NarrationBeat.project_id == project_id).delete(synchronize_session=False)
+    # 分镜是视频工程、配音和素材的共同主键。重生成时复用同序号的活动记录，
+    # 只归档多余记录，绝不再 delete/recreate，避免视频位置与素材绑定悬空。
+    existing = (
+        db.query(StoryboardShot)
+        .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
+        .order_by(StoryboardShot.sequence.asc())
+        .all()
+    )
+    next_revision = max((int(s.revision or 1) for s in existing), default=0) + 1
+    created: list[StoryboardShot] = []
+    scoring_points = context["scoring_points"]
+    evidence_rows = list(context.get("evidence_rows", []))
+    fallback_ref = None
+    fallback_fact = next(iter(context["confirmed_facts"] or context["sourced_facts"]), None)
+    if fallback_fact:
+        fallback_ref = SourceRef(
+            documentId=fallback_fact.document_id or "",
+            documentName=fallback_fact.document.file_name if fallback_fact.document else "",
+            page=fallback_fact.page_number,
+            locationLabel=fallback_fact.location_label or (f"P{fallback_fact.page_number}" if fallback_fact.page_number else None),
+            quote=_clean_one_line(fallback_fact.source_quote, 120),
+        )
+    max_shots = _target_shot_count(params)
+    for i, shot_data in enumerate(parsed.shots[:max_shots], 1):
+        scoring_ids = [scoring_points[idx].id for idx in shot_data.scoringPointIds if 0 <= idx < len(scoring_points)]
+        evidence_refs = _evidence_refs_for_shot(shot_data, evidence_rows)
+        if evidence_refs:
+            shot_data.sourceReferences = list(shot_data.sourceReferences) + evidence_refs
+        references = _map_refs(db, shot_data, project_id)
+        if references and evidence_refs and shot_data.factCheckStatus == "unverified":
+            shot_data.factCheckStatus = "partial"
+        if _is_fact_bearing_text(shot_data.narration) and not references:
+            shot_data.factCheckStatus = "unverified"
+            parsed.unverifiedFacts.append(f"分镜{i}缺少可核验来源")
+            if bool(params.get("strict_fact_mode", True)):
+                shot_data.narration = _grounded_fallback_narration(shot_data, evidence_rows)
+        if not references and i == 1 and fallback_ref:
+            references = _map_refs(db, ShotOut(
+                sequence=shot_data.sequence,
                 title=shot_data.title,
                 section=shot_data.section,
                 narration=shot_data.narration,
-                duration_seconds=float(shot_data.durationSeconds),
-                visual_type=shot_data.visualType,
-                visual_description=shot_data.visualDescription,
-                visual_prompt=shot_data.imagePrompt or shot_data.visualDescription,
-                image_prompt=shot_data.imagePrompt,
-                video_prompt=shot_data.videoPrompt,
+                durationSeconds=shot_data.durationSeconds,
+                visualType=shot_data.visualType,
+                visualDescription=shot_data.visualDescription,
+                imagePrompt=shot_data.imagePrompt,
+                videoPrompt=shot_data.videoPrompt,
                 keywords=shot_data.keywords,
-                scoring_point_ids=scoring_ids,
-                source_references=refs,
-                fact_check_status=shot_data.factCheckStatus,
-                status="ai_done",
-                versions=[
-                    {
-                        "revision": 1,
-                        "narration": shot_data.narration,
-                        "visual_prompt": shot_data.imagePrompt or shot_data.visualDescription,
-                        "visual_type": shot_data.visualType,
-                        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "source": "ai",
-                    }
+                scoringPointIds=shot_data.scoringPointIds,
+                sourceReferences=[fallback_ref],
+                factCheckStatus=shot_data.factCheckStatus,
+            ), project_id)
+        shot = existing[i - 1] if i <= len(existing) else StoryboardShot(project_id=project_id, sequence=i)
+        shot.sequence = i
+        shot.title = shot_data.title
+        shot.section = shot_data.section
+        shot.narration = shot_data.narration
+        shot.duration_seconds = float(shot_data.durationSeconds)
+        shot.visual_type = shot_data.visualType
+        shot.visual_description = shot_data.visualDescription
+        shot.visual_prompt = shot_data.imagePrompt or shot_data.visualDescription
+        shot.image_prompt = shot_data.imagePrompt
+        shot.video_prompt = shot_data.videoPrompt
+        shot.keywords = shot_data.keywords
+        shot.scoring_point_ids = scoring_ids
+        shot.source_references = references
+        shot.fact_check_status = shot_data.factCheckStatus
+        shot.status = "ai_done"
+        shot.is_active = True
+        shot.revision = next_revision
+        history = list(shot.versions or [])
+        history.append({"revision": next_revision, "narration": shot_data.narration, "visual_prompt": shot_data.imagePrompt or shot_data.visualDescription, "visual_type": shot_data.visualType, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"), "source": "ai" if source.startswith("ai") else source})
+        shot.versions = history[-20:]
+        db.add(shot)
+        created.append(shot)
+
+    for old_shot in existing[len(created):]:
+        old_shot.is_active = False
+        old_shot.status = "archived"
+        old_shot.revision = next_revision
+    db.flush()
+    db.commit()
+    beat_count = _create_narration_beats(
+        db,
+        project_id,
+        created,
+        context.get("evidence_rows", []),
+        int(params.get("chars_per_minute", 215)),
+    )
+    db.commit()
+    from app.services.scoring_service import compute_scoring_coverage
+    coverage = compute_scoring_coverage(db, project_id)
+    total_duration = sum(float(s.duration_seconds or 0) for s in created)
+    total_chars = sum(len(s.narration or "") for s in created)
+    quality = _quality_report(parsed, params, context.get("evidence_rows", []), beat_count)
+    return {"shot_count": len(created), "beat_count": beat_count, "total_duration_seconds": total_duration, "total_narration_characters": total_chars, "duration_gap_seconds": int(params.get("target_duration_seconds", 540) - total_duration), "unverified_facts": list(dict.fromkeys(parsed.unverifiedFacts)), "scoring_coverage_rate": coverage["coverage_rate"], "scoring_covered": coverage["covered"], "scoring_total": coverage["total"], "quality_report": quality}
+
+
+def _single_pass(params: dict[str, Any], context: dict, adapter) -> NarrationOutput:
+    return parse_narration_output(adapter.complete(_build_prompt(params, context), temperature=.2, max_tokens=8000, response_format={"type": "json_object"}))
+
+
+def _update_generation_task(db, params: dict[str, Any], progress: int, message: str) -> None:
+    task_id = params.get("task_id")
+    task = db.get(RenderTask, task_id) if task_id else None
+    if not task:
+        return
+    task.progress = max(int(task.progress or 0), max(0, min(99, int(progress))))
+    task.message = message[:512]
+    db.commit()
+
+
+def _multi_stage(params: dict[str, Any], context: dict, adapter, db) -> tuple[NarrationOutput, dict[str, Any]]:
+    """执行可恢复的证据→大纲→分章→局部终审流程。
+
+    任何阶段失败都向任务层抛出异常，不能偷偷退回单轮生成；证据批次本身
+    会在下次运行时跳过已成功结果，从而实现断点续跑。
+    """
+    from app.services.narration_evidence import (
+        approve_evidence,
+        create_evidence_run,
+        evidence_for_generation,
+        extract_evidence_run,
+    )
+
+    project_id = params["project_id"]
+    evidence_run_id = params.get("evidence_run_id")
+    run = db.get(NarrationRun, evidence_run_id) if evidence_run_id else None
+    if run and run.project_id != project_id:
+        raise RuntimeError("证据运行与当前项目不匹配")
+    if not run:
+        run_params = dict(params)
+        adapter_model = getattr(adapter, "config", {}).get("model") if getattr(adapter, "config", None) else None
+        if adapter_model:
+            run_params["model"] = adapter_model
+        run = create_evidence_run(db, project_id, run_params)
+        params["evidence_run_id"] = run.id
+        task_id = params.get("task_id")
+        task = db.get(RenderTask, task_id) if task_id else None
+        if task:
+            task.params = {**(task.params or {}), "evidence_run_id": run.id, "task_id": task.id}
+            db.commit()
+        extract_evidence_run(
+            db,
+            run.id,
+            adapter,
+            progress_callback=lambda percent, message: _update_generation_task(
+                db, params, round(percent * 0.68), message
+            ),
+        )
+    elif run.status not in {"evidence_review", "outline_review", "drafting", "qa", "completed"}:
+        extract_evidence_run(
+            db,
+            run.id,
+            adapter,
+            progress_callback=lambda percent, message: _update_generation_task(
+                db, params, round(percent * 0.68), message
+            ),
+        )
+
+    auto_approve = bool(params.get("evidence_auto_approve", True))
+    if auto_approve:
+        approve_evidence(db, run.id)
+    rows = evidence_for_generation(db, run.id, auto_approve=auto_approve)
+    if not rows:
+        # 仅在项目没有可解析文档、但旧版事实台账仍有来源时兼容旧项目。
+        fallback = _fallback_evidence(context)
+        if fallback.evidenceItems:
+            evidence = fallback
+        elif not context["confirmed_facts"] and not context["sourced_facts"] and not context["document_excerpt_lines"]:
+            # 空项目仍允许生成待补资料的组织框架，但不得伪造任何工程事实。
+            evidence = EvidenceOutput(
+                evidenceItems=[
+                    EvidenceItem(
+                        topic="总体部署",
+                        fact="当前项目未提供可引用的工程事实",
+                        sequenceContext="仅可写组织框架，不得写数字、日期、设备或具体方法",
+                        factCheckStatus="unverified",
+                    )
                 ],
+                rejectedFacts=[],
             )
-            db.add(shot)
-            created.append(shot)
+        else:
+            raise RuntimeError("全文证据为空，无法进入正式写作")
+    else:
+        evidence = _evidence_output_from_rows(rows)
+    if not auto_approve and not rows:
+        raise RuntimeError(f"证据运行 {run.id} 尚未完成人工审核")
 
+    context = _build_context(
+        db,
+        project_id,
+        evidence_run_id=run.id,
+        evidence_auto_approve=auto_approve,
+    )
+    context["evidence_run_id"] = run.id
+    outline: OutlineOutput | None = None
+    saved_outline = (run.params or {}).get("outline_output")
+    if run.status in {"drafting", "qa", "completed"} and isinstance(saved_outline, dict):
+        try:
+            outline = OutlineOutput.model_validate(saved_outline)
+            _update_generation_task(db, params, 72, "已恢复章节大纲，继续分章写作…")
+        except Exception as exc:
+            logger.warning("saved_outline_invalid", run_id=run.id, error=str(exc))
+
+    if outline is None:
+        run.status = "outline_generating"
+        run.progress = {"stage": "outline_generating", "completed": run.completed_batches, "total": run.total_batches}
         db.commit()
+        _update_generation_task(db, params, 72, "全文证据已完成，正在编排章节大纲…")
+        try:
+            outline = _complete_structured(
+                adapter,
+                _build_outline_prompt(params, context, evidence),
+                parse_outline_output,
+                stage="outline",
+                max_tokens=5000,
+                temperature=.1,
+            )
+        except Exception as exc:
+            run.status = "outline_failed"
+            run.error_message = str(exc)[:2000]
+            db.commit()
+            raise
 
-        # 刷新评分点覆盖
-        from app.services.scoring_service import compute_scoring_coverage
+        run_params = dict(run.params or {})
+        run_params["outline_output"] = outline.model_dump(mode="json")
+        run.params = run_params
+    run.status = "drafting"
+    db.commit()
+    total_shots = max(_target_shot_count(params), len(outline.chapters))
+    budgets = _allocate_shot_budgets(outline, total_shots)
+    drafts: list[ChapterDraftOutput] = []
+    shot_start = 1
+    chapter_total = max(1, len(outline.chapters))
+    for chapter_index, (chapter, budget) in enumerate(zip(outline.chapters, budgets), start=1):
+        try:
+            draft = _complete_structured(
+                adapter,
+                _build_chapter_prompt(params, context, chapter, evidence, shot_start=shot_start, shot_budget=budget),
+                parse_chapter_draft_output,
+                stage=f"chapter_{chapter.sequence}",
+                max_tokens=5000,
+                temperature=.2,
+            )
+        except Exception as exc:
+            run.status = "drafting_failed"
+            run.error_message = str(exc)[:2000]
+            db.commit()
+            raise
+        chapter_evidence_ids = list(chapter.evidenceIds)
+        for evidence_index in chapter.evidenceIndexes:
+            if 0 <= evidence_index < len(evidence.evidenceItems):
+                evidence_id = evidence.evidenceItems[evidence_index].evidenceId
+                if evidence_id:
+                    chapter_evidence_ids.append(evidence_id)
+        chapter_evidence_ids = list(dict.fromkeys(chapter_evidence_ids))
+        if chapter_evidence_ids:
+            for local_index, shot in enumerate(draft.shots):
+                if not shot.evidenceIds:
+                    start = (local_index * 2) % len(chapter_evidence_ids)
+                    shot.evidenceIds = [
+                        chapter_evidence_ids[start],
+                        chapter_evidence_ids[(start + 1) % len(chapter_evidence_ids)],
+                    ]
+        drafts.append(draft)
+        shot_start += len(draft.shots)
+        _update_generation_task(
+            db,
+            params,
+            72 + round(chapter_index / chapter_total * 20),
+            f"已完成章节 {chapter_index}/{chapter_total}：{chapter.title}",
+        )
+    merged = _merge_chapter_drafts(params, context, outline, drafts)
+    run.status = "qa"
+    db.commit()
+    _update_generation_task(db, params, 94, "分章文案已完成，正在核对事实与引用…")
+    try:
+        review = _complete_structured(
+            adapter,
+            _build_qa_review_prompt(params, context, outline, merged),
+            parse_qa_review_output,
+            stage="qa",
+            max_tokens=4500,
+        )
+    except Exception as exc:
+        run.status = "qa_failed"
+        run.error_message = str(exc)[:2000]
+        db.commit()
+        raise
+    by_sequence = {shot.sequence: shot for shot in merged.shots}
+    for patch in review.patches:
+        shot = by_sequence.get(patch.sequence)
+        if not shot:
+            continue
+        if patch.narration:
+            shot.narration = patch.narration
+        if patch.factCheckStatus:
+            shot.factCheckStatus = patch.factCheckStatus
+    merged.unverifiedFacts = list(dict.fromkeys(merged.unverifiedFacts + review.unsupportedFacts))
+    _lint_narration_output(merged)
+    run.progress = {"stage": "qa", "completed": run.total_batches, "total": run.total_batches}
+    db.commit()
+    return merged, {
+        "run_id": run.id,
+        "evidence_count": len(rows),
+        "rejected_fact_count": len(review.unsupportedFacts),
+        "qa_issue_count": len(review.issues),
+        "qa_issues": review.issues,
+        "outline_chapters": [{"title": c.title, "duration_seconds": c.durationSeconds} for c in outline.chapters],
+    }
 
-        coverage = compute_scoring_coverage(db, project_id)
 
-        total_duration = sum(float(s.duration_seconds or 0) for s in created)
-        total_chars = sum(len(s.narration or "") for s in created)
-        target = int(params.get("target_duration_seconds", 300))
+def generate_storyboard(params: dict[str, Any]) -> dict[str, Any]:
+    """按资料取证、篇章编排、分章写作和终审四阶段生成分镜。"""
+    from app.services.ai_configuration import refresh_runtime_config_from_db
 
-        return {
-            "shot_count": len(created),
-            "total_duration_seconds": total_duration,
-            "total_narration_characters": total_chars,
-            "duration_gap_seconds": int(target - total_duration),
-            "unverified_facts": parsed.unverifiedFacts,
-            "scoring_coverage_rate": coverage["coverage_rate"],
-            "scoring_covered": coverage["covered"],
-            "scoring_total": coverage["total"],
-        }
+    refresh_runtime_config_from_db()
+    db = SessionLocal()
+    try:
+        context = _build_context(db, params["project_id"])
+        adapter = get_llm_adapter()
+        if not adapter.is_available():
+            raise RuntimeError("LLM 服务不可用，请检查配置。")
+        mode = params.get("generation_mode", "multi_stage")
+        summary: dict[str, Any] = {}
+        if mode == "single_pass":
+            parsed = _single_pass(params, context, adapter)
+        else:
+            parsed, summary = _multi_stage(params, context, adapter, db)
+            mode = "multi_stage"
+            context = _build_context(
+                db,
+                params["project_id"],
+                evidence_run_id=summary.get("run_id"),
+                evidence_auto_approve=bool(params.get("evidence_auto_approve", True)),
+            )
+            context["evidence_run_id"] = summary.get("run_id")
+        result = _persist_storyboard_output(db, params, context, parsed, source="ai_multi_stage" if mode == "multi_stage" else "ai")
+        result["generation_mode"] = mode
+        if summary:
+            result["stage_summary"] = summary
+            run = db.get(NarrationRun, summary.get("run_id")) if summary.get("run_id") else None
+            if run:
+                run.status = "completed"
+                run.progress = {"stage": "completed", "completed": run.total_batches, "total": run.total_batches}
+                db.commit()
+        return result
     finally:
         db.close()
 
 
 def regenerate_single_shot(params: dict[str, Any]) -> dict[str, Any]:
     """重新生成单个分镜。"""
+    from app.services.ai_configuration import refresh_runtime_config_from_db
+
+    refresh_runtime_config_from_db()
     project_id = params["project_id"]
     shot_id = params["shot_id"]
     hint = params.get("prompt_hint", "")
@@ -505,10 +2014,10 @@ def regenerate_single_shot(params: dict[str, Any]) -> dict[str, Any]:
             f"目标字数：约 {target_chars} 字\n"
             f"用户补充要求：{hint or '无'}\n\n"
             f"已确认工程事实：\n{fact_text}\n\n"
-            f"待确认但有来源材料：\n{sourced_fact_text}\n\n"
+            f"台账候选事实（‘自动识别可用’可直接引用，‘待审核’只能谨慎表达）：\n{sourced_fact_text}\n\n"
             f"文档摘录：\n{excerpt_text}\n\n"
             "写作要求：具体、连贯、有施工组织逻辑；不要空泛口号；不要编造未给出的数字、日期、金额、业绩；"
-            "包含待确认材料时用谨慎措辞。仅输出一段旁白正文，不要 JSON、标题或解释。"
+            "包含标记为待审核的材料时用谨慎措辞；自动识别可用材料可直接引用。仅输出一段旁白正文，不要 JSON、标题或解释。"
         )
         raw = adapter.complete(prompt, temperature=0.25, max_tokens=1200)
         # Mock 返回的是完整 JSON，需要兼容：取第一个 narration
@@ -530,6 +2039,8 @@ def regenerate_single_shot(params: dict[str, Any]) -> dict[str, Any]:
         shot.narration = narration
         shot.versions = versions
         shot.status = "ai_done"
+        db.flush()
+        rebuild_project_narration_beats(db, project_id)
         db.commit()
 
         return {"shot_id": shot_id, "narration": narration, "revision": revision}

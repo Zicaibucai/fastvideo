@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable
+from uuid import uuid4
 
 from app.adapters.factory import get_image_adapter, get_tts_adapter, get_video_adapter
 from app.core.database import SessionLocal
@@ -45,7 +46,6 @@ def _run_with_status(task_id: str, fn: Callable[[dict], dict]) -> dict:
 # ---------------- 图片生成 ----------------
 
 def _gen_image(params: dict[str, Any]) -> dict[str, Any]:
-    shot_id = params["shot_id"]
     project_id = params.get("project_id")
     prompt = params.get("prompt") or "建筑工程场景"
 
@@ -55,17 +55,18 @@ def _gen_image(params: dict[str, Any]) -> dict[str, Any]:
 
     images = adapter.generate(prompt, n=1)
     data = images[0] if images else b""
-    key = f"projects/{project_id}/shots/{shot_id}/image.png"
+    key = f"projects/{project_id}/render-assets/legacy-{uuid4().hex}.png"
     storage.save(key, data)
 
     db = SessionLocal()
     try:
-        shot = db.get(StoryboardShot, shot_id)
-        if not shot:
+        shot_id = params.get("shot_id")
+        shot = db.get(StoryboardShot, shot_id) if shot_id else None
+        if shot_id and (not shot or shot.project_id != project_id):
             raise RuntimeError("分镜不存在")
         asset = Asset(
             project_id=project_id,
-            name=f"分镜{shot.sequence} 画面",
+            name="AI 渲染图（旧任务）",
             asset_type="image",
             source="ai_image",
             file_key=key,
@@ -83,8 +84,9 @@ def _gen_image(params: dict[str, Any]) -> dict[str, Any]:
         )
         db.add(asset)
         db.flush()
-        shot.image_asset_id = asset.id
-        shot.status = "ai_done"
+        if shot:
+            shot.image_asset_id = asset.id
+            shot.visual_review_status = "pending"
         db.commit()
         return {"asset_id": asset.id, "file_key": key}
     finally:
@@ -138,7 +140,6 @@ def _gen_tts(params: dict[str, Any]) -> dict[str, Any]:
 # ---------------- 视频生成 ----------------
 
 def _gen_video(params: dict[str, Any]) -> dict[str, Any]:
-    shot_id = params["shot_id"]
     project_id = params.get("project_id")
     prompt = params.get("prompt") or "工程演示视频"
     duration = float(params.get("duration", 5.0))
@@ -147,39 +148,18 @@ def _gen_video(params: dict[str, Any]) -> dict[str, Any]:
     if not adapter.is_available():
         raise RuntimeError("视频生成服务不可用，请检查配置。")
 
-    # MiniMax 图生视频优先使用分镜已选画面（渲染版 > 模型截图）。
-    # 没有画面时 Adapter 才回退到文生视频模型。
-    first_frame_bytes: bytes | None = None
-    first_frame_asset_id: str | None = None
-    lookup_db = SessionLocal()
-    try:
-        source_shot = lookup_db.get(StoryboardShot, shot_id)
-        if not source_shot:
-            raise RuntimeError("分镜不存在")
-        first_frame_asset_id = source_shot.image_asset_id or source_shot.source_model_asset_id
-        if first_frame_asset_id:
-            first_frame_asset = lookup_db.get(Asset, first_frame_asset_id)
-            if first_frame_asset and first_frame_asset.file_key:
-                first_frame_bytes = storage.load(first_frame_asset.file_key)
-    finally:
-        lookup_db.close()
-
     data = adapter.generate(
         prompt,
         duration=duration,
-        first_frame_bytes=first_frame_bytes,
     )
-    key = f"projects/{project_id}/shots/{shot_id}/video.mp4"
+    key = f"projects/{project_id}/video-assets/legacy-{uuid4().hex}.mp4"
     storage.save(key, data)
 
     db = SessionLocal()
     try:
-        shot = db.get(StoryboardShot, shot_id)
-        if not shot:
-            raise RuntimeError("分镜不存在")
         asset = Asset(
             project_id=project_id,
-            name=f"分镜{shot.sequence} 视频",
+            name="AI 视频（旧任务）",
             asset_type="video",
             source="ai_video",
             file_key=key,
@@ -189,16 +169,13 @@ def _gen_video(params: dict[str, Any]) -> dict[str, Any]:
             generated_by=adapter.provider,
             prompt=prompt,
             meta={
-                "first_frame_asset_id": first_frame_asset_id,
-                "generation_mode": "image_to_video" if first_frame_bytes else "text_to_video",
+                "generation_mode": "text_to_video",
                 "requested_duration": duration,
                 "is_mock": adapter.provider == "mock",
             },
         )
         db.add(asset)
         db.flush()
-        shot.video_asset_id = asset.id
-        shot.video_clip_key = key
         db.commit()
         return {"asset_id": asset.id, "file_key": key}
     finally:

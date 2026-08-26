@@ -20,13 +20,31 @@ def health(db: Session = Depends(get_db)) -> dict:
         db.execute(text("SELECT 1"))
     except Exception:
         db_status = "error"
+    celery_status = "disabled"
+    if settings.use_celery:
+        client = None
+        try:
+            import redis
+
+            client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1)
+            client.ping()
+            celery_status = "ok"
+        except Exception:
+            celery_status = "error"
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+    overall = "ok" if db_status == "ok" and celery_status in {"ok", "disabled"} else "degraded"
     return {
-        "status": "ok" if db_status == "ok" else "degraded",
+        "status": overall,
         "app": settings.app_name,
         "env": settings.app_env,
         "database": db_status,
         "storage": settings.storage_backend,
-        "celery": settings.use_celery,
+        "celery": celery_status,
     }
 
 

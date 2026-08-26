@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Tag, Space, Button } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { taskApi } from '../api'
@@ -19,6 +19,10 @@ const TASK_TYPE_LABEL: Record<string, string> = {
   gen_image: '画面生成',
   gen_video: '视频生成',
   gen_tts: 'AI配音',
+  gen_voice_version: '配音版本生成',
+  tts_batch: '批量配音',
+  segment_render: '分段渲染',
+  segment_render_all: '批量分段渲染',
   compose_video: '视频合成',
   export: '视频导出',
 }
@@ -74,29 +78,46 @@ export function useTaskPolling(
 export function useRunTask() {
   const [running, setRunning] = useState(false)
   const [status, setStatus] = useState<{ taskId: string; status: string } | null>(null)
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mounted = useRef(true)
+
+  useEffect(() => () => {
+    mounted.current = false
+    if (pollTimer.current) clearInterval(pollTimer.current)
+  }, [])
 
   const run = (promise: Promise<{ data: { task_id: string } }>, onDone?: (t: RenderTask) => void) => {
+    if (pollTimer.current) clearInterval(pollTimer.current)
     setRunning(true)
     setStatus(null)
     promise
       .then((res) => {
+        if (!mounted.current) return null
         setStatus({ taskId: res.data.task_id, status: 'queued' })
         return res.data.task_id
       })
       .then((taskId) => {
+        if (!taskId || !mounted.current) return
         // 轮询
         const poll = setInterval(() => {
           taskApi.detail(taskId).then((r) => {
+            if (!mounted.current) return
             setStatus({ taskId, status: r.data.status })
             if (['success', 'failed', 'cancelled'].includes(r.data.status)) {
               clearInterval(poll)
+              pollTimer.current = null
               setRunning(false)
               onDone?.(r.data)
             }
-          })
+          }).catch(() => {})
         }, 1500)
+        pollTimer.current = poll
       })
-      .catch(() => setRunning(false))
+      .catch(() => {
+        if (pollTimer.current) clearInterval(pollTimer.current)
+        pollTimer.current = null
+        setRunning(false)
+      })
   }
 
   return { run, running, status }

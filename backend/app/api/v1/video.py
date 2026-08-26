@@ -14,6 +14,7 @@ from app.core.database import get_db
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.storage import storage
 from app.models.asset import Asset
+from app.models.audio_version import AudioVersion
 from app.models.export_task import ExportTask
 from app.models.project import Project
 from app.models.render_task import RenderTask
@@ -67,6 +68,29 @@ def _get_owned_vp(db: Session, vp_id: str, user: User) -> VideoProject:
     return vp
 
 
+def _cancel_previous_segment_tasks(db: Session, segment_id: str) -> None:
+    """同一分段重新渲染时，关闭之前遗留的排队/运行任务。"""
+    tasks = (
+        db.query(RenderTask)
+        .filter(
+            RenderTask.task_type == "segment_render",
+            RenderTask.status.in_(["queued", "running", "retry"]),
+        )
+        .all()
+    )
+    changed = False
+    for task in tasks:
+        if (task.params or {}).get("segment_id") != segment_id:
+            continue
+        task.status = "cancelled"
+        task.progress = 0
+        task.error_message = None
+        task.message = "已由更新的分段渲染任务替代"
+        changed = True
+    if changed:
+        db.commit()
+
+
 def _asset_url(db: Session, asset_id: str | None) -> str | None:
     if not asset_id:
         return None
@@ -80,13 +104,34 @@ def _asset_url(db: Session, asset_id: str | None) -> str | None:
     return None
 
 
+def _audio_version_url(db: Session, version_id: str | None) -> str | None:
+    if not version_id:
+        return None
+    version = db.get(AudioVersion, version_id)
+    if not version or version.is_deleted:
+        return None
+    return _asset_url(db, version.mp3_asset_id or version.audio_asset_id)
+
+
+def _versioned_file_url(key: str | None, version: str | None = None) -> str | None:
+    """为会被覆盖的分段文件追加版本号，避免 video 元素复用旧缓存。"""
+    if not key:
+        return None
+    stamp = "".join(ch for ch in str(version or "") if ch.isalnum())
+    return f"/files/{key}?v={stamp}" if stamp else f"/files/{key}"
+
+
 def _segment_out(db: Session, seg: VideoSegment) -> VideoSegmentOut:
     from app.models.storyboard_shot import StoryboardShot
 
     shot = db.get(StoryboardShot, seg.storyboard_shot_id) if seg.storyboard_shot_id else None
-    has_visual = bool(seg.visual_asset_id)
-    has_audio = bool(seg.audio_version_id)
-    visual_source = "manual" if seg.visual_asset_id else ("shot" if shot and (shot.video_asset_id or shot.image_asset_id or shot.source_model_asset_id) else ("placeholder" if shot else "none"))
+    visual_asset = db.get(Asset, seg.visual_asset_id) if seg.visual_asset_id else None
+    has_visual = bool(visual_asset and visual_asset.asset_type in ("image", "video"))
+    audio_version = db.get(AudioVersion, seg.audio_version_id) if seg.audio_version_id else None
+    has_audio = bool(audio_version and not audio_version.is_deleted)
+    visual_source = "manual" if has_visual else ("placeholder" if shot else "none")
+    source_duration = visual_asset.duration_seconds if has_visual else None
+    playback_speed = round(source_duration / seg.duration, 4) if source_duration and seg.duration else None
     return VideoSegmentOut(
         id=seg.id,
         video_project_id=seg.video_project_id,
@@ -95,8 +140,8 @@ def _segment_out(db: Session, seg: VideoSegment) -> VideoSegmentOut:
         visual_asset_id=seg.visual_asset_id,
         audio_version_id=seg.audio_version_id,
         duration=seg.duration,
+        time_adaptation=seg.time_adaptation,
         is_locked=seg.is_locked,
-        visual_motion=seg.visual_motion,
         fit_mode=seg.fit_mode,
         transition_type=seg.transition_type,
         transition_duration=seg.transition_duration,
@@ -105,7 +150,7 @@ def _segment_out(db: Session, seg: VideoSegment) -> VideoSegmentOut:
         render_status=seg.render_status,
         render_progress=seg.render_progress,
         output_key=seg.output_key,
-        output_url=f"/files/{seg.output_key}" if seg.output_key else None,
+        output_url=_versioned_file_url(seg.output_key, seg.rendered_at or seg.updated_at),
         input_hash=seg.input_hash,
         needs_rebuild=seg.needs_rebuild,
         error_message=seg.error_message,
@@ -114,8 +159,10 @@ def _segment_out(db: Session, seg: VideoSegment) -> VideoSegmentOut:
         updated_at=seg.updated_at,
         shot_title=shot.title if shot else None,
         narration=shot.narration if shot else None,
-        visual_url=_asset_url(db, seg.visual_asset_id),
-        audio_url=_asset_url(db, seg.audio_version_id),
+        visual_url=_asset_url(db, seg.visual_asset_id) if has_visual else None,
+        visual_source_duration=source_duration,
+        visual_playback_speed=playback_speed,
+        audio_url=_audio_version_url(db, seg.audio_version_id),
         has_visual=has_visual,
         has_audio=has_audio,
         has_subtitle=seg.subtitle_enabled,
@@ -178,6 +225,19 @@ def create_video_project(
     data = payload.model_dump(exclude={"project_id"}, exclude_none=True)
     if "fps" in data and data["fps"] not in (24, 25, 30):
         raise ConflictError("fps 仅支持 24/25/30")
+    for track in data.get("music_tracks") or []:
+        asset = db.get(Asset, track["asset_id"])
+        if not asset or asset.project_id != project_id:
+            raise NotFoundError("背景音乐素材不存在")
+        if asset.asset_type != "audio":
+            raise ConflictError("背景音乐只能选择音频素材")
+    for item in data.get("timeline") or []:
+        if item.get("visual_asset_id"):
+            asset = db.get(Asset, item["visual_asset_id"])
+            if not asset or asset.project_id != project_id:
+                raise NotFoundError("视频素材不存在")
+            if asset.asset_type != "video":
+                raise ConflictError("视频工程时间轴只能使用视频素材")
     vp = VideoProject(project_id=project_id, **data)
     db.add(vp)
     db.commit()
@@ -207,6 +267,21 @@ def update_video_project(
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
     if "fps" in data and data["fps"] not in (24, 25, 30):
         raise ConflictError("fps 仅支持 24/25/30")
+    if "music_tracks" in data and data["music_tracks"] is not None:
+        for track in data["music_tracks"]:
+            asset = db.get(Asset, track["asset_id"])
+            if not asset or asset.project_id != vp.project_id:
+                raise NotFoundError("背景音乐素材不存在")
+            if asset.asset_type != "audio":
+                raise ConflictError("背景音乐只能选择音频素材")
+    if "timeline" in data and data["timeline"] is not None:
+        for item in data["timeline"]:
+            if item.get("visual_asset_id"):
+                asset = db.get(Asset, item["visual_asset_id"])
+                if not asset or asset.project_id != vp.project_id:
+                    raise NotFoundError("视频素材不存在")
+                if asset.asset_type != "video":
+                    raise ConflictError("视频工程时间轴只能使用视频素材")
     for field, value in data.items():
         setattr(vp, field, value)
     db.commit()
@@ -239,7 +314,7 @@ def sync_storyboard(
     result = sync_storyboard_to_video_project(db, vp, current)
     segs = (
         db.query(VideoSegment)
-        .filter(VideoSegment.video_project_id == vp.id)
+        .filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status != "skipped")
         .order_by(VideoSegment.sequence.asc())
         .all()
     )
@@ -259,9 +334,10 @@ def list_segments(
     current: User = Depends(get_current_user),
 ) -> list[VideoSegmentOut]:
     vp = _get_owned_vp(db, vp_id, current)
+    sync_storyboard_to_video_project(db, vp, current)
     segs = (
         db.query(VideoSegment)
-        .filter(VideoSegment.video_project_id == vp.id)
+        .filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status != "skipped")
         .order_by(VideoSegment.sequence.asc())
         .all()
     )
@@ -281,12 +357,32 @@ def patch_segment(
     if not seg or seg.video_project_id != vp.id:
         raise NotFoundError("分段不存在")
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
+    if "visual_asset_id" in data and data["visual_asset_id"]:
+        asset = db.get(Asset, data["visual_asset_id"])
+        if not asset or asset.project_id != vp.project_id:
+            raise NotFoundError("视频素材不存在")
+        if asset.asset_type not in ("image", "video"):
+            raise ConflictError("视频工程只能选择图片或视频素材")
+    if "audio_version_id" in data and data["audio_version_id"]:
+        version = db.get(AudioVersion, data["audio_version_id"])
+        if not version or version.project_id != vp.project_id or version.is_deleted:
+            raise NotFoundError("配音版本不存在")
+        if seg.storyboard_shot_id and version.storyboard_shot_id != seg.storyboard_shot_id:
+            raise ConflictError("只能选择当前分镜的配音版本")
     for field, value in data.items():
         setattr(seg, field, value)
-    if "duration" in data or "visual_asset_id" in data or "audio_version_id" in data:
+    rebuild_fields = {
+        "duration", "visual_asset_id", "audio_version_id", "time_adaptation", "subtitle_enabled",
+        "volume", "fit_mode", "transition_type", "transition_duration",
+    }
+    if rebuild_fields.intersection(data):
         seg.needs_rebuild = True
         if seg.render_status == "success":
             seg.render_status = "pending"
+        # 旧成片不再代表当前设置，避免界面继续播放过期视频。
+        seg.output_key = None
+        seg.render_progress = 0
+        seg.rendered_at = None
     db.commit()
     db.refresh(seg)
     return _segment_out(db, seg)
@@ -300,14 +396,14 @@ def reorder_segments(
     current: User = Depends(get_current_user),
 ) -> list[VideoSegmentOut]:
     vp = _get_owned_vp(db, vp_id, current)
-    segs = {s.id: s for s in db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id).all()}
+    segs = {s.id: s for s in db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status != "skipped").all()}
     for index, sid in enumerate(payload.segment_ids, start=1):
         if sid in segs:
             segs[sid].sequence = index
     db.commit()
     ordered = (
         db.query(VideoSegment)
-        .filter(VideoSegment.video_project_id == vp.id)
+        .filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status != "skipped")
         .order_by(VideoSegment.sequence.asc())
         .all()
     )
@@ -315,9 +411,18 @@ def reorder_segments(
 
 
 def _dispatch_segment_task(db: Session, vp_id: str, seg: VideoSegment, user: User) -> RenderTask:
+    vp = db.get(VideoProject, vp_id)
+    if not vp:
+        raise NotFoundError("视频工程不存在")
+    _cancel_previous_segment_tasks(db, seg.id)
+    # 先持久化排队状态，Celery 尚未接手时前端也能显示 0% 而不是“待合成”。
+    seg.render_status = "queued"
+    seg.render_progress = 0
+    seg.error_message = None
+    db.commit()
     task = create_render_task(
         db,
-        project_id=vp_id,
+        project_id=vp.project_id,
         shot_id=seg.storyboard_shot_id,
         task_type="segment_render",
         params={"segment_id": seg.id, "task_id": None},
@@ -359,9 +464,32 @@ def preview_single_segment(
         raise NotFoundError("分段不存在")
     # 已渲染且未失效时直接返回，否则渲染
     if seg.render_status == "success" and seg.output_key and not seg.needs_rebuild:
-        return {"segment_id": segment_id, "status": "success", "output_url": f"/files/{seg.output_key}", "cached": True}
+        return {
+            "segment_id": segment_id,
+            "status": "success",
+            "output_url": _versioned_file_url(seg.output_key, seg.rendered_at or seg.updated_at),
+            "cached": True,
+        }
     task = _dispatch_segment_task(db, vp_id, seg, current)
     return {"task_id": task.id, "status": task.status, "segment_id": segment_id}
+
+
+@router.get("/video-projects/{vp_id}/segments/{segment_id}/download", response_model=None, summary="下载已合成分段")
+def download_segment(
+    vp_id: str,
+    segment_id: str,
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+) -> Response:
+    """下载当前视频工程中已经合成的单个分段。"""
+    vp = _get_owned_vp(db, vp_id, current)
+    seg = db.get(VideoSegment, segment_id)
+    if not seg or seg.video_project_id != vp.id:
+        raise NotFoundError("分段不存在")
+    if seg.render_status != "success" or not seg.output_key or not storage.exists(seg.output_key):
+        raise NotFoundError("该分段尚未完成合成")
+    data = storage.load(seg.output_key)
+    return _file_response(data, f"segment_{seg.sequence}_{seg.id[:8]}.mp4", "video/mp4")
 
 
 @router.post("/video-projects/{vp_id}/segments/{segment_id}/retry", status_code=202, response_model=dict, summary="重试失败分段")

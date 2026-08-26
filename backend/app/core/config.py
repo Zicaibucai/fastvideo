@@ -10,8 +10,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 # 项目根目录（backend/）
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     secret_key: str = "please-change-me"
+    auth_cookie_secure: bool = False
     api_v1_prefix: str = "/api/v1"
     backend_cors_origins: list[str] = ["http://localhost:5173"]
 
@@ -61,14 +63,24 @@ class Settings(BaseSettings):
     # ---------- FFmpeg ----------
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
+    # Apple Silicon 本机使用 rife-metal；选择 RIFE 时执行失败会明确报错，不静默降级。
+    rife_binary: str = "rife-metal"
+    rife_model: str = ""
+    rife_tier: str = "hq"  # hq | balanced | fast
+    rife_timeout: int = 900
     video_width: int = 1920
     video_height: int = 1080
     video_fps: int = 30
 
     # ---------- AI 服务（Adapter + Mock） ----------
-    ai_llm_provider: str = "disabled"  # deepseek | openai | disabled(mock)
+    ai_llm_provider: str = "kimi"  # kimi | deepseek | openai | disabled(mock)
     ai_llm_base_url: str = ""
-    ai_llm_model: str = "gpt-4o-mini"
+    ai_llm_model: str = "kimi-k3"
+    # 解说词、工程信息提取和提示词大师统一使用 Kimi；Kimi 兼容文本与图片输入。
+    ai_prompt_master_provider: str = "kimi"
+    ai_prompt_master_model: str = "kimi-k3"
+    # 模板制作默认必须使用真实 AI；仅测试/演示环境可显式打开 Mock。
+    ai_prompt_master_allow_mock: bool = False
 
     ai_image_provider: str = "disabled"  # minimax | openai | disabled(mock)
     ai_image_base_url: str = ""
@@ -77,7 +89,7 @@ class Settings(BaseSettings):
 
     ai_video_provider: str = "seedance"  # seedance | minimax | disabled(mock)
     ai_video_base_url: str = ""
-    ai_video_model: str = "doubao-seedance-1-0-pro-250528"
+    ai_video_model: str = "doubao-seedance-2-0-260128"
 
     ai_tts_provider: str = "disabled"
     ai_tts_base_url: str = ""
@@ -99,10 +111,16 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout: int = 120
 
-    # DeepSeek（自然语言 / 解说词）
+    # DeepSeek（历史兼容配置，当前文本结构化环节默认不使用）
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_timeout: int = 120
+
+    # Kimi 多模态/文本模型（OpenAI 兼容接口）
+    kimi_api_key: str = ""
+    kimi_base_url: str = "https://api.moonshot.ai/v1"
+    kimi_model: str = "kimi-k3"
+    kimi_timeout: int = 180
 
     # MiniMax（图片生成、参考图渲染、图生视频）
     # 国内账号默认使用 api.minimaxi.com；海外账号可在 .env 改为 api.minimax.io。
@@ -115,7 +133,8 @@ class Settings(BaseSettings):
     minimax_video_timeout: int = 900
 
     # Seedream（图生图，火山方舟 Ark）
-    # 与 Seedance 视频同属火山方舟，API Key 可复用 SEEDANCE_API_KEY。
+    # 与 Seedance 视频同属火山方舟，API Key 可复用 ARK_API_KEY / SEEDANCE_API_KEY。
+    ark_api_key: str = ""
     seedream_api_key: str = ""
     seedream_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     seedream_image_model: str = "doubao-seedream-4-5-251128"
@@ -132,9 +151,18 @@ class Settings(BaseSettings):
     seedance_video_timeout: int = 900
     seedance_video_resolution: str = "720p"
 
+    # 历史火山方舟视觉模型配置（兼容旧配置，当前业务环节默认不再使用）
+    # 未单独填写 API Key 时复用 ARK_API_KEY / SEEDANCE_API_KEY。
+    volcengine_vision_api_key: str = ""
+    volcengine_vision_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    # 可填写火山方舟控制台中的模型 ID 或推理接入点 ID（ep-...）。
+    volcengine_vision_model: str = "doubao-seed-2-0-lite-260215"
+    volcengine_vision_timeout: int = 180
+
     # ---------- 管理员 ----------
     admin_email: str = "admin@fastvideo.cn"
     admin_password: str = "admin123456"
+    allow_public_registration: bool = True
 
     @field_validator("backend_cors_origins", mode="before")
     @classmethod
@@ -148,15 +176,35 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
+    @model_validator(mode="after")
+    def _validate_production_security(self) -> "Settings":
+        """Fail fast when a production instance still uses demo credentials."""
+        if self.app_env.lower() in {"prod", "production"}:
+            placeholders = {"please-change-me", "please-change-me-to-a-long-random-string", "change-me-in-production"}
+            if self.debug:
+                raise ValueError("生产环境必须关闭 DEBUG")
+            if self.secret_key in placeholders or len(self.secret_key) < 32:
+                raise ValueError("生产环境必须配置至少 32 位随机 SECRET_KEY")
+            if self.admin_password in {"admin123456", "change-me", "password"} or len(self.admin_password) < 12:
+                raise ValueError("生产环境必须配置非默认 ADMIN_PASSWORD")
+            if not self.auth_cookie_secure:
+                raise ValueError("生产环境必须启用 AUTH_COOKIE_SECURE")
+            if self.allow_public_registration:
+                raise ValueError("生产环境默认关闭公开注册，请使用管理员创建人员")
+        return self
+
     @property
     def ai_keys_configured(self) -> bool:
         """是否配置了任何真实 AI Key（用于前端提示与降级判断）。"""
         return bool(
             self.openai_api_key
             or self.deepseek_api_key
+            or self.kimi_api_key
             or self.minimax_api_key
+            or self.ark_api_key
             or self.seedance_api_key
             or self.seedream_api_key
+            or self.volcengine_vision_api_key
         )
 
     @property
@@ -175,7 +223,20 @@ class Settings(BaseSettings):
 
     @property
     def sqlalchemy_url(self) -> str:
-        return self.database_url
+        """Return a stable database URL independent of the launch directory.
+
+        SQLite's ``sqlite:///./app.db`` is resolved against the process cwd.
+        The API is often started from the repository root while Celery is
+        started from ``backend/``, which can silently create two databases.
+        Relative SQLite paths therefore resolve from the backend directory.
+        """
+        url = make_url(self.database_url)
+        if url.drivername.startswith("sqlite") and url.database not in (None, ":memory:"):
+            db_path = Path(url.database)
+            if not db_path.is_absolute():
+                db_path = (BASE_DIR / db_path).resolve()
+                url = url.set(database=str(db_path))
+        return url.render_as_string(hide_password=False)
 
     @property
     def is_sqlite(self) -> bool:

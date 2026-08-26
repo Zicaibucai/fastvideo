@@ -1,6 +1,7 @@
 """ExtractedFact 工程参数事实模型。
 
-每个参数保存：值、单位、来源文件/页码/原文、置信度、人工确认状态。
+每个参数保存：值、单位、来源文件/页码/完整原文上下文、置信度、人工确认状态。
+metadata_json 额外保存中文参数名、对象范围、类别、提取方式和自动使用状态。
 不同来源冲突时标记 conflict，不自动选择。
 """
 
@@ -27,7 +28,7 @@ class ExtractedFact(BaseModel):
     fact_name: Mapped[str] = mapped_column(String(255), nullable=False)
     fact_value: Mapped[str] = mapped_column(Text, nullable=False)
     unit: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)  # 最短必要原文
+    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)  # 完整句子或表格行
     confidence: Mapped[float] = mapped_column(default=0.5, nullable=False)
     # unverified | confirmed | rejected | conflict
     verification_status: Mapped[str] = mapped_column(

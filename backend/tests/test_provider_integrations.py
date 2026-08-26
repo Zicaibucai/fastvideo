@@ -1,4 +1,4 @@
-"""DeepSeek / MiniMax Provider 契约测试（不发起真实付费请求）。"""
+"""Kimi / DeepSeek / MiniMax Provider 契约测试（不发起真实付费请求）。"""
 
 from __future__ import annotations
 
@@ -23,10 +23,11 @@ from app.adapters.factory import (
     get_video_adapter,
 )
 from app.adapters.image import MiniMaxImageAdapter, SeedreamImageAdapter
-from app.adapters.llm import DeepSeekLLMAdapter
+from app.adapters.llm import DeepSeekLLMAdapter, KimiLLMAdapter
 from app.adapters.tts import VolcengineTTSAdapter, VOLCENGINE_VOICES
 from app.adapters.video import MiniMaxH3VideoAdapter, MiniMaxVideoAdapter, SeedanceVideoAdapter
 from app.core.config import settings
+from app.core.exceptions import AIProviderError
 
 
 def _png(color=(32, 80, 120)) -> bytes:
@@ -106,6 +107,72 @@ def test_deepseek_uses_openai_compatible_chat(monkeypatch):
     assert captured["client"]["base_url"] == "https://api.deepseek.com"
     assert captured["request"]["model"] == "deepseek-v4-flash"
     assert captured["request"]["messages"][0]["content"] == "输出 JSON"
+
+
+def test_kimi_supports_text_and_multimodal_messages(monkeypatch):
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured["request"] = kwargs
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+    adapter = KimiLLMAdapter(
+        api_key="kimi-test",
+        base_url="https://api.moonshot.ai/v1",
+        timeout=180,
+        model="kimi-k3",
+    )
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "输出 JSON"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ],
+    }]
+    assert adapter.chat(messages) == '{"ok": true}'
+    assert adapter.supports_vision is True
+    assert adapter.capabilities()["structured_output"] is True
+    assert captured["client"]["base_url"] == "https://api.moonshot.ai/v1"
+    assert captured["request"]["model"] == "kimi-k3"
+    assert captured["request"]["messages"] == messages
+
+
+def test_kimi_code_key_normalizes_endpoint_and_k3_model(monkeypatch):
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured["request"] = kwargs
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+            )
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("openai.OpenAI", FakeOpenAI)
+    adapter = KimiLLMAdapter(
+        api_key="sk-kimi-test",
+        base_url="https://api.kimi.com/coding",
+        timeout=180,
+        model="kimi-k3",
+    )
+    assert adapter.chat([{"role": "user", "content": "hello"}]) == "ok"
+    assert captured["client"]["base_url"] == "https://api.kimi.com/coding/v1"
+    assert captured["request"]["model"] == "k3"
+    assert captured["request"]["temperature"] == 0.6
+    assert captured["request"]["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_minimax_image_payload_and_capabilities():
@@ -291,6 +358,36 @@ def test_seedance_image_to_video_payload_contract():
     assert len(payload["content"]) == 2
 
 
+def test_seedance_omits_resolution_for_r2v_default():
+    """Seedance 2.0 r2v 直接使用模型默认分辨率，避免兼容网关 400。"""
+    calls: list[dict] = []
+
+    class FakeSeedance(SeedanceVideoAdapter):
+        def _request_json(self, method, path, *, payload=None, params=None):
+            calls.append(dict(payload or {}))
+            return {"id": "cgt-task-r2v"}
+
+    adapter = FakeSeedance(
+        api_key="seedance-test",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        model="doubao-seedance-2-0",
+        resolution="1080P",
+        poll_interval=0,
+        video_timeout=5,
+    )
+    task_id = adapter.create_generation_task(
+        prompt="多图参考",
+        first_frame_bytes=_png(),
+        reference_frame_bytes=[_png(), _png(color=(20, 30, 40))],
+        mode="multi_reference_video",
+        duration=2,
+    )
+
+    assert task_id == "cgt-task-r2v"
+    assert "resolution" not in calls[0]
+    assert calls[0]["duration"] == 4
+
+
 def test_seedance_first_last_frame_contract_preserves_order():
     """首尾帧：content 顺序固定为 [first_frame, last_frame]，role 正确。"""
     calls: list[dict] = []
@@ -359,6 +456,18 @@ def test_seedance_image_to_video_requires_first_frame_no_text_fallback():
     with pytest.raises(Exception) as exc2:
         adapter.generate("无图", first_frame_bytes=None)
     assert "必须提供首帧" in str(exc2.value)
+
+
+def test_seedance_rejects_overlong_prompt_without_silent_truncation():
+    """施工顺序或安全约束超过上限时必须明确失败，不能只发送前 2000 字符。"""
+    adapter = _seedance_adapter()
+    with pytest.raises(Exception) as exc:
+        adapter.create_generation_task(
+            prompt="施工阶段" * 1001,
+            first_frame_bytes=_png(),
+            mode="image_to_video",
+        )
+    assert "不会静默截断" in str(exc.value)
 
 
 def test_seedance_poll_and_download_and_cancel():

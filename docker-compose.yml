@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: fastvideo
-      POSTGRES_PASSWORD: fastvideo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: fastvideo
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -47,7 +47,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: fastvideo
-      MINIO_ROOT_PASSWORD: fastvideo_secret
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -74,13 +74,13 @@ services:
       minio:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://fastvideo:fastvideo@postgres:5432/fastvideo
+      DATABASE_URL: postgresql+psycopg://fastvideo:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/fastvideo
       REDIS_URL: redis://redis:6379/0
       USE_CELERY: "true"
       STORAGE_BACKEND: minio
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: fastvideo
-      MINIO_SECRET_KEY: fastvideo_secret
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
       MINIO_BUCKET: fastvideo
       # AI 服务默认 Mock（无 Key），配置后自动切换真实服务
       AI_LLM_PROVIDER: ${AI_LLM_PROVIDER:-disabled}
@@ -119,13 +119,24 @@ services:
       SEEDREAM_TIMEOUT: ${SEEDREAM_TIMEOUT:-180}
       SEEDREAM_IMAGE_SIZE: ${SEEDREAM_IMAGE_SIZE:-2K}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-false}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@fastvideo.cn}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
+      ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
       BACKEND_CORS_ORIGINS: '["http://localhost:5173","http://localhost:8000"]'
     ports:
       - "8000:8000"
     volumes:
       - storage_data:/app/data
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   # ---------- Celery Worker ----------
   worker:
@@ -142,13 +153,13 @@ services:
       minio:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://fastvideo:fastvideo@postgres:5432/fastvideo
+      DATABASE_URL: postgresql+psycopg://fastvideo:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/fastvideo
       REDIS_URL: redis://redis:6379/0
       USE_CELERY: "true"
       STORAGE_BACKEND: minio
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: fastvideo
-      MINIO_SECRET_KEY: fastvideo_secret
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
       MINIO_BUCKET: fastvideo
       AI_LLM_PROVIDER: ${AI_LLM_PROVIDER:-disabled}
       AI_LLM_BASE_URL: ${AI_LLM_BASE_URL:-}
@@ -186,7 +197,13 @@ services:
       SEEDREAM_TIMEOUT: ${SEEDREAM_TIMEOUT:-180}
       SEEDREAM_IMAGE_SIZE: ${SEEDREAM_IMAGE_SIZE:-2K}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-false}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@fastvideo.cn}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
+      ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
     volumes:
       - storage_data:/app/data
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2

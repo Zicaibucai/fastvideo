@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import Date, Float, ForeignKey, JSON, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -22,6 +22,9 @@ class Project(BaseModel):
     status: Mapped[str] = mapped_column(
         String(32), default="draft", nullable=False, index=True
     )  # draft | active | archived
+    last_entered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # 关键投标参数（含来源页码，防止 AI 编造）
     bid_area: Mapped[float | None] = mapped_column(Float, nullable=True)  # 建筑面积(m²)

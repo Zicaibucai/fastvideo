@@ -3,26 +3,32 @@
 from __future__ import annotations
 
 import uuid
+import subprocess
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import NotFoundError
+from app.core.logging import get_logger
 from app.core.storage import storage
 from app.models.asset import Asset
 from app.models.project import Project
-from app.models.render_task import RenderTask
 from app.models.storyboard_shot import StoryboardShot
 from app.models.user import User
 from app.schemas.asset import AssetCreate, AssetOut, AssetUpdate
 from app.schemas.common import Message
+from app.services.video_project_service import backfill_video_render_assets
+from app.services.video_template_service import inspect_source_video
 from app.services.task_runner import create_render_task, dispatch
-from app.tasks.assets import gen_image_sync, gen_image_task, gen_tts_sync, gen_tts_task, gen_video_sync, gen_video_task
 
 router = APIRouter(prefix="/projects/{project_id}/assets", tags=["素材库"])
+logger = get_logger(__name__)
 
 
 def _get_project(db: Session, project_id: str, user: User) -> Project:
@@ -32,25 +38,65 @@ def _get_project(db: Session, project_id: str, user: User) -> Project:
     return project
 
 
-def _get_shot(db: Session, project_id: str, shot_id: str) -> StoryboardShot:
+@router.post("/ai-image", response_model=dict, status_code=202, summary="为分镜生成 AI 图片")
+def generate_ai_image(
+    project_id: str,
+    shot_id: str = Form(...),
+    prompt: str = Form("建筑工程场景"),
+    db: Session = Depends(get_db),
+    current: User = Depends(get_current_user),
+) -> dict:
+    """兼容旧版分镜画面入口；生成的是图片素材，不是 AI 视频绑定。"""
+    _get_project(db, project_id, current)
     shot = db.get(StoryboardShot, shot_id)
-    if not shot or shot.project_id != project_id:
+    if not shot or shot.project_id != project_id or not shot.is_active:
         raise NotFoundError("分镜不存在")
-    return shot
+    task = create_render_task(
+        db,
+        project_id=project_id,
+        shot_id=shot_id,
+        task_type="gen_image",
+        params={"project_id": project_id, "shot_id": shot_id, "prompt": prompt},
+        message="AI 生成画面中…",
+    )
+    from app.tasks.assets import gen_image_sync, gen_image_task
+
+    dispatch(db, task=task, async_func=gen_image_task, sync_func=gen_image_sync)
+    db.refresh(task)
+    return {"task_id": task.id, "status": task.status}
 
 
 @router.get("", response_model=list[AssetOut], summary="素材列表")
 def list_assets(
     project_id: str,
     asset_type: str | None = None,
+    source: str | None = None,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[Asset]:
     _get_project(db, project_id, current)
+    backfill_video_render_assets(db, project_id)
     query = db.query(Asset).filter(Asset.project_id == project_id)
     if asset_type:
         query = query.filter(Asset.asset_type == asset_type)
-    return query.order_by(Asset.created_at.desc()).all()
+    if source:
+        query = query.filter(Asset.source == source)
+    assets = query.order_by(Asset.created_at.desc()).all()
+    # 视频素材可能是旧版本上传的，尚未写入时长/分辨率。素材库打开时
+    # 仅对缺少元数据的视频做一次轻量 ffprobe，供模板选择器展示基础说明。
+    if asset_type == "video":
+        changed = False
+        for asset in assets:
+            if not asset.file_key or (asset.duration_seconds is not None and asset.width and asset.height):
+                continue
+            try:
+                inspect_source_video(db, asset)
+                changed = True
+            except (OSError, RuntimeError, ValueError) as exc:
+                logger.warning("asset_video_metadata_probe_failed", asset_id=asset.id, error=str(exc))
+        if changed:
+            db.commit()
+    return assets
 
 
 @router.post("", response_model=AssetOut, status_code=201, summary="上传素材")
@@ -68,7 +114,7 @@ async def upload_asset(
 
     if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
         asset_type = "image"
-    elif ext in (".mp4", ".mov", ".avi", ".mkv"):
+    elif ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
         asset_type = "video"
     elif ext in (".mp3", ".wav", ".m4a", ".ogg"):
         asset_type = "audio"
@@ -95,83 +141,56 @@ async def upload_asset(
     return asset
 
 
-@router.post("/ai-image", status_code=202, summary="AI 生成图片（按分镜）")
-def generate_image(
+@router.get("/{asset_id}/first-frame", response_model=None, summary="视频起始帧")
+def get_video_first_frame(
     project_id: str,
-    shot_id: str = Form(...),
-    prompt: str | None = Form(None),
+    asset_id: str,
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
-) -> dict:
+) -> Response:
+    """返回视频素材的第一帧，作为视频工程选材时的可视化确认。"""
     _get_project(db, project_id, current)
-    shot = _get_shot(db, project_id, shot_id)
-    task = create_render_task(
-        db,
-        project_id=project_id,
-        shot_id=shot_id,
-        task_type="gen_image",
-        params={"shot_id": shot_id, "project_id": project_id, "prompt": prompt or shot.visual_prompt or ""},
-        message="AI 生成画面中…",
-    )
-    dispatch(db, task=task, async_func=gen_image_task, sync_func=gen_image_sync)
-    return {"task_id": task.id, "status": task.status}
+    asset = db.get(Asset, asset_id)
+    if not asset or asset.project_id != project_id:
+        raise NotFoundError("素材不存在")
+    if asset.asset_type != "video" or not asset.file_key:
+        raise HTTPException(status_code=422, detail="只有视频素材支持起始帧预览")
 
+    if asset.thumbnail_key and storage.exists(asset.thumbnail_key):
+        return Response(storage.load(asset.thumbnail_key), media_type="image/jpeg")
 
-@router.post("/ai-tts", status_code=202, summary="AI 配音（按分镜）")
-def generate_tts(
-    project_id: str,
-    shot_id: str = Form(...),
-    voice_name: str = Form("onyx"),
-    speed: float = Form(1.0),
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user),
-) -> dict:
-    _get_project(db, project_id, current)
-    shot = _get_shot(db, project_id, shot_id)
-    task = create_render_task(
-        db,
-        project_id=project_id,
-        shot_id=shot_id,
-        task_type="gen_tts",
-        params={
-            "shot_id": shot_id,
-            "project_id": project_id,
-            "text": shot.narration or "配音文本",
-            "voice_name": voice_name,
-            "speed": speed,
-        },
-        message="AI 配音生成中…",
-    )
-    dispatch(db, task=task, async_func=gen_tts_task, sync_func=gen_tts_sync)
-    return {"task_id": task.id, "status": task.status}
+    if not storage.exists(asset.file_key):
+        raise NotFoundError("视频文件不存在")
+    source_path: str | None = None
+    try:
+        source_path = storage.local_path(asset.file_key)
+        with tempfile.TemporaryDirectory(prefix="fastvideo_first_frame_") as tmp:
+            frame = Path(tmp) / "first.jpg"
+            proc = subprocess.run(
+                [
+                    settings.ffmpeg_binary,
+                    "-y",
+                    "-i", source_path,
+                    "-frames:v", "1",
+                    "-vf", "scale=640:-2",
+                    "-q:v", "3",
+                    str(frame),
+                ],
+                capture_output=True,
+                timeout=60,
+            )
+            if proc.returncode != 0 or not frame.exists():
+                raise HTTPException(status_code=422, detail="无法读取该视频的起始帧")
+            frame_data = frame.read_bytes()
+    finally:
+        if source_path:
+            storage.release_local_path(source_path)
 
-
-@router.post("/ai-video", status_code=202, summary="AI 生成视频（按分镜）")
-def generate_video(
-    project_id: str,
-    shot_id: str = Form(...),
-    prompt: str | None = Form(None),
-    duration: float = Form(5.0),
-    db: Session = Depends(get_db),
-    current: User = Depends(get_current_user),
-) -> dict:
-    _get_project(db, project_id, current)
-    shot = _get_shot(db, project_id, shot_id)
-    task = create_render_task(
-        db,
-        project_id=project_id,
-        shot_id=shot_id,
-        task_type="gen_video",
-        params={
-            "shot_id": shot_id,
-            "project_id": project_id,
-            "prompt": prompt or shot.video_prompt or shot.visual_prompt or "工程演示视频",
-            "duration": duration,
-        },
-        message="AI 生成视频中…",
-    )
-    dispatch(db, task=task, async_func=gen_video_task, sync_func=gen_video_sync)
-    return {"task_id": task.id, "status": task.status}
+    thumbnail_key = f"projects/{project_id}/assets/{asset.id}_first_frame.jpg"
+    storage.save(thumbnail_key, frame_data)
+    asset.thumbnail_key = thumbnail_key
+    db.commit()
+    return Response(frame_data, media_type="image/jpeg")
 
 
 @router.patch("/{asset_id}", response_model=AssetOut, summary="更新素材")

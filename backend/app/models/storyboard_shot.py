@@ -1,12 +1,12 @@
 """StoryboardShot 解说词与分镜模型。
 
-每个分镜对应一段解说词 + 画面 + 配音音频 + 输出视频片段。
-AI 结果支持多版本（versions JSON）与人工编辑。
+分镜保存叙事、时长和来源信息；画面渲染结果属于独立素材库，视频素材只在
+AI 视频/视频工程链路中按需使用。AI 结果支持多版本（versions JSON）与人工编辑。
 """
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -41,19 +41,15 @@ class StoryboardShot(BaseModel):
     video_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
-    image_asset_id: Mapped[str | None] = mapped_column(
-        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
-    )
     video_asset_id: Mapped[str | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL"), nullable=True
     )
 
-    # 画面制作关联（Phase 3）
+    # 画面制作（模型截图渲染）绑定。与 AI 视频素材分开，AI 视频不会写入这些字段。
     source_model_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     render_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    # none|generating|reviewing|approved|rejected
+    image_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     visual_review_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    # 选择历史 [{version_id, asset_id, selected_by, selected_at}]
     visual_history: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     # 音频 / 视频
@@ -74,10 +70,16 @@ class StoryboardShot(BaseModel):
         String(32), default="draft", nullable=False, index=True
     )  # draft | ai_generating | ai_done | edited | failed
 
+    # 分镜身份必须跨重生成保持稳定。旧版本不再删除，而是归档，供视频工程与素材绑定追溯。
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     # 历史版本（[{revision, narration, visual_prompt, created_at, source}]）
     versions: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     project = relationship("Project", back_populates="storyboard_shots")
-    image_asset = relationship("Asset", foreign_keys=[image_asset_id], lazy="selectin")
+    narration_beats = relationship(
+        "NarrationBeat", back_populates="shot", cascade="all, delete-orphan", order_by="NarrationBeat.sequence"
+    )
     video_asset = relationship("Asset", foreign_keys=[video_asset_id], lazy="selectin")
     audio_asset = relationship("Asset", foreign_keys=[audio_asset_id], lazy="selectin")

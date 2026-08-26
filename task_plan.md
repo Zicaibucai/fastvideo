@@ -151,7 +151,7 @@ User / Project / SourceDocument / StoryboardShot / Asset / RenderTask / VoiceTem
 
 ### Phase 6+: 由下一段功能提示词决定
 
-### Phase 6/7: AI 视频生成模块（Seedance 图片驱动视频分镜）✅ 已完成
+### Phase 6/7: AI 视频生成模块（Seedance 图片驱动视频素材）✅ 已完成
 - [x] 新增 `SeedanceVideoAdapter`（火山方舟 Ark），保留旧 MiniMax 代码但不再作为默认视频 Provider
 - [x] Seedance 能力矩阵：image_to_video / first_last_frame_video / async_task / cancel_task / text_to_video=false
 - [x] 图生视频上传 1 张首帧；首尾帧上传 2 张图片顺序固定 `[first_frame, last_frame]`；不支持时禁用，不允许降级
@@ -165,7 +165,7 @@ User / Project / SourceDocument / StoryboardShot / Asset / RenderTask / VoiceTem
 - [x] 建筑强约束默认启用并保存快照；冲突指令（增加楼层/改变建筑轮廓/移动道路/替换主楼）阻止提交
 - [x] 独立页面 `/projects/:projectId/ai-video`（三栏：素材与参考帧 / 模板与提示词 / 参数与结果）
 - [x] 视频提示词独立填写，不使用 narration/visual_prompt/image_prompt，无任何自动回退
-- [x] 结果版本：预览/下载/选为当前结果/绑定分镜/删除；修改解说词不影响已配置视频任务
+- [x] 结果版本：预览/下载/选为当前结果/删除；AI 视频素材不绑定分镜，仅由视频工程分段选择；修改解说词不影响已配置视频任务
 - [x] 接口：模板列表/管理、创建/查询/取消/重试任务、版本列表/选择/绑定/删除、约束预检、参考帧列表、Provider 能力
 - [x] 新增测试 test_phase7_ai_video.py（20 项）；后端 pytest **149 passed**（另 2 项沙箱文件删除权限受限属环境限制）
 - [x] 前端 tsc + vite build 通过；`.env` / `.env.example` / docker-compose 同步 Seedance 配置

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from app.core.database import SessionLocal
@@ -19,9 +20,10 @@ from app.models.document_chunk import DocumentChunk
 from app.models.document_page import DocumentPage
 from app.models.render_task import RenderTask
 from app.models.source_document import SourceDocument
-from app.services.document_parser import parse_document_bytes
+from app.services.document_parser import ParsedDocument, ParsedPage, parse_document_bytes
 from app.services.fact_extractor import (
     apply_conflicts,
+    enrich_numeric_candidates_with_ai,
     extract_facts_from_pages,
     sync_project_key_params,
 )
@@ -43,48 +45,91 @@ def _parse_document(params: dict[str, Any]) -> dict[str, Any]:
         doc.parse_error = None
         db.commit()
 
-        raw_bytes = storage.load(doc.file_key)
-
-        # 1. 逐页解析
-        parsed = parse_document_bytes(raw_bytes, doc.file_type)
-
-        # 2. 清空旧的 pages/chunks 记录（重新解析）
-        db.query(DocumentPage).filter(DocumentPage.document_id == doc.id).delete()
-        db.query(DocumentChunk).filter(DocumentChunk.document_id == doc.id).delete()
-        db.flush()
-
-        # 3. 写入页面
-        for p in parsed.pages:
-            db.add(
-                DocumentPage(
-                    document_id=doc.id,
-                    page_number=p.page_number,
-                    location_label=p.location_label,
-                    raw_text=p.raw_text,
-                    cleaned_text=p.cleaned_text,
-                    markdown_text=p.markdown_text,
-                    page_type=p.page_type,
-                    extraction_method=p.extraction_method,
-                    ocr_status=p.ocr_status,
-                    confidence=p.confidence,
-                    metadata_json=p.metadata,
-                )
+        # 重新整理台账时可以复用已经解析好的页面，避免 639MB DOCX 再次解压。
+        # 正常上传/首次解析仍走完整文件解析；只有明确传入 reuse_parsed_pages 才复用。
+        reuse_parsed_pages = bool(params.get("reuse_parsed_pages"))
+        existing_pages = []
+        if reuse_parsed_pages:
+            existing_pages = (
+                db.query(DocumentPage)
+                .filter(DocumentPage.document_id == doc.id)
+                .order_by(DocumentPage.page_number.asc())
+                .all()
             )
-
-        # 4. 写入内容块
-        for c in parsed.chunks:
-            db.add(
-                DocumentChunk(
-                    document_id=doc.id,
-                    page_start=c.page_start,
-                    page_end=c.page_end,
-                    heading_path=c.heading_path,
-                    content=c.content,
-                    token_count=len(c.content or "") // 1,
-                    chunk_type=c.chunk_type,
-                    metadata_json=c.metadata,
-                )
+        if existing_pages:
+            parsed = ParsedDocument(
+                pages=[
+                    ParsedPage(
+                        page_number=page.page_number,
+                        location_label=page.location_label or f"P{page.page_number}",
+                        raw_text=page.raw_text or "",
+                        cleaned_text=page.cleaned_text or "",
+                        markdown_text=page.markdown_text or page.cleaned_text or "",
+                        page_type=page.page_type or "text",
+                        extraction_method=page.extraction_method or "native",
+                        ocr_status=page.ocr_status or "none",
+                        confidence=page.confidence,
+                        metadata=page.metadata_json or {},
+                    )
+                    for page in existing_pages
+                ],
+                chunks=[],
+                toc=[],
+                total_pages=len(existing_pages),
+                ocr_pages=sum(1 for page in existing_pages if page.extraction_method == "ocr"),
+                failed_pages=sum(1 for page in existing_pages if page.ocr_status == "failed"),
+                table_count=doc.table_count or 0,
             )
+        else:
+            # 大文件友好：优先从磁盘路径流式解析，避免把 1GB 招标文件整文件读入内存导致 OOM。
+            # local 存储直接返回真实路径；MinIO 会下载到临时文件，解析后通过 release_local_path 删除。
+            from app.services.document_parser import parse_document_path
+
+            local_path = storage.local_path(doc.file_key)
+            try:
+                parsed = parse_document_path(local_path, doc.file_type)
+            finally:
+                storage.release_local_path(local_path)
+
+        if not existing_pages:
+            # 2. 清空旧的 pages/chunks 记录（重新解析）
+            db.query(DocumentPage).filter(DocumentPage.document_id == doc.id).delete()
+            db.query(DocumentChunk).filter(DocumentChunk.document_id == doc.id).delete()
+            db.flush()
+
+            # 3. 写入页面
+            for p in parsed.pages:
+                db.add(
+                    DocumentPage(
+                        document_id=doc.id,
+                        page_number=p.page_number,
+                        location_label=p.location_label,
+                        raw_text=p.raw_text,
+                        cleaned_text=p.cleaned_text,
+                        markdown_text=p.markdown_text,
+                        page_type=p.page_type,
+                        extraction_method=p.extraction_method,
+                        ocr_status=p.ocr_status,
+                        confidence=p.confidence,
+                        metadata_json=p.metadata,
+                    )
+                )
+
+            # 4. 写入内容块
+            for c in parsed.chunks:
+                db.add(
+                    DocumentChunk(
+                        document_id=doc.id,
+                        sequence=c.sequence,
+                        page_start=c.page_start,
+                        page_end=c.page_end,
+                        heading_path=c.heading_path,
+                        content=c.content,
+                        token_count=_count_chunk_tokens(c.content or ""),
+                        chunk_type=c.chunk_type,
+                        metadata_json=c.metadata,
+                    )
+                )
 
         # 更新文档统计字段
         doc.page_count = parsed.total_pages
@@ -112,9 +157,14 @@ def _parse_document(params: dict[str, Any]) -> dict[str, Any]:
         db.query(ExtractedFact).filter(
             ExtractedFact.document_id == doc.id
         ).delete()
-        db.flush()
+        # 先提交删除，释放 SQLite 写锁；AI 批量整理可能持续较久，不能让
+        # 整个 AI 调用过程一直占着文档和台账的写事务。
+        db.commit()
 
         candidates = extract_facts_from_pages(parsed.pages, doc.id, doc.project_id)
+        # 规则层先完整保留数字证据，再由 AI 根据完整上下文补充中文参数名。
+        # AI 服务不可用时由 fact_extractor 保留规则结果，不阻塞文档解析。
+        candidates = enrich_numeric_candidates_with_ai(candidates)
         fact_objs = []
         for c in candidates:
             f = ExtractedFact(**c)
@@ -159,6 +209,15 @@ def _parse_document(params: dict[str, Any]) -> dict[str, Any]:
         db.close()
 
 
+def _count_chunk_tokens(text: str) -> int:
+    """与解析器保持一致的轻量 token 估算，避免把字符数误报为 token 数。"""
+    import re
+
+    cjk = len(re.findall(r"[一-鿿]", text))
+    words = len(re.findall(r"[A-Za-z0-9]+", text))
+    return max(1, int(cjk / 1.5 + words)) if text else 0
+
+
 # ---------------- Celery 任务 ----------------
 
 @celery_app.task(bind=True, name="fastvideo.parse_document", max_retries=3, default_retry_delay=10)
@@ -195,7 +254,18 @@ def _parse_document_from_db(task_id: str) -> dict[str, Any]:
         task = db.get(RenderTask, task_id)
         if not task:
             raise RuntimeError("任务不存在")
-        result = _parse_document(task.params or {})
+        params = dict(task.params or {})
+    finally:
+        # 不要把读取 RenderTask 的事务带进长时间的文档解析和 AI 调用。
+        db.close()
+
+    result = _parse_document(params)
+
+    db = SessionLocal()
+    try:
+        task = db.get(RenderTask, task_id)
+        if not task:
+            raise RuntimeError("任务不存在")
         db.refresh(task)
         task.status = "success"
         task.progress = 100

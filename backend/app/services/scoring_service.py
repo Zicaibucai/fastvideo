@@ -119,7 +119,7 @@ def _safe_match(text: str, keywords: list[str]) -> bool:
 def compute_scoring_coverage(db, project_id: str) -> dict:
     """计算评分点覆盖率：每个评分点被哪些分镜覆盖。"""
     points = db.query(ScoringPoint).filter(ScoringPoint.project_id == project_id).all()
-    shots = db.query(StoryboardShot).filter(StoryboardShot.project_id == project_id).all()
+    shots = db.query(StoryboardShot).filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True)).all()
 
     # 建立分镜关键词索引
     shot_keywords: list[tuple[StoryboardShot, str]] = []

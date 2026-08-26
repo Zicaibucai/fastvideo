@@ -63,6 +63,11 @@ class ForbiddenError(AppError):
     code = "FORBIDDEN"
 
 
+class RateLimitError(AppError):
+    status_code = 429
+    code = "RATE_LIMITED"
+
+
 class AIProviderError(AppError):
     """AI 服务调用失败（可用于重试）。"""
 

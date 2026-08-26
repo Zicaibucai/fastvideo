@@ -16,7 +16,6 @@ import {
   App,
   Switch,
   Divider,
-  Alert,
 } from 'antd'
 import {
   PlusOutlined,
@@ -169,13 +168,13 @@ export default function VoiceTemplates() {
   return (
     <div>
       <div className="page-header">
-        <Title level={4} style={{ marginBottom: 4 }}>
-          配音模板管理
-        </Title>
-        <Space>
-          <Text type="secondary">系统 / 企业 / 项目级配音模板，含音色风格与授权管理</Text>
-          <Button onClick={() => navigate(`/project/${projectId}/voice`)}>返回配音工作区</Button>
-        </Space>
+        <div className="page-heading">
+          <Title level={4} style={{ marginBottom: 4 }}>
+            配音模板管理
+          </Title>
+          <Text type="secondary" className="page-description">系统 / 企业 / 项目级配音模板，含音色风格与授权管理</Text>
+        </div>
+        <Button className="page-actions" onClick={() => navigate(`/project/${projectId}/voice`)}>返回配音工作区</Button>
       </div>
 
       <Card>
@@ -241,7 +240,7 @@ export default function VoiceTemplates() {
       <Modal title="音色试听" open={!!previewUrl} onCancel={() => setPreviewUrl(null)} footer={null}>
         {previewUrl && <audio controls src={previewUrl} style={{ width: '100%' }} autoPlay />}
         {provider === 'mock' && (
-          <Alert type="info" showIcon style={{ marginTop: 8 }} message="Mock 试听为演示提示音，非真实朗读。" />
+          <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>Mock 试听为演示提示音，非真实朗读。</Text>
         )}
       </Modal>
 
@@ -316,11 +315,9 @@ export default function VoiceTemplates() {
           </Form.Item>
         </Form>
         <Divider />
-        <Alert
-          type="warning"
-          showIcon
-          message="授权状态为 pending / rejected / expired / unknown 的音色不得用于正式视频导出；mock_only 仅限演示。"
-        />
+        <Text type="warning">
+          授权状态为 pending / rejected / expired / unknown 的音色不得用于正式视频导出；mock_only 仅限演示。
+        </Text>
       </Modal>
     </div>
   )

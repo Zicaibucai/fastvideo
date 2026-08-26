@@ -1,6 +1,6 @@
-# Phase 6/7 交付说明：AI 视频生成模块（Seedance 图片驱动视频分镜）
+# Phase 6/7 交付说明：AI 视频生成模块（Seedance 图片驱动视频素材）
 
-> 交付日期：2026-08-14 ｜ 目标：将现有 MiniMax 视频生成替换为 Seedance，建立「图片驱动视频分镜」工作流。
+> 交付日期：2026-08-14 ｜ 目标：将现有 MiniMax 视频生成替换为 Seedance，建立独立的「图片驱动视频素材」工作流。
 > 独立于「解说词与分镜」页面；不使用 `narration` / `visual_prompt` / `image_prompt`；无任何自动回退。
 
 ---
@@ -10,11 +10,11 @@
 ### 后端（新增）
 ```
 backend/
-├── alembic/versions/0007_ai_video_generation.py     # video_generation_templates / jobs / versions 三张表
+├── alembic/versions/0019_version_number_constraints.py # 当前迁移链 head
 ├── app/models/video_generation.py                    # 模板 / 任务 / 版本 数据实体
-├── app/schemas/video_gen.py                          # 模板 / 任务 / 版本 / 绑定 / 约束 / 参考帧 Schema
-├── app/services/video_gen_templates.py               # 10 个内置建筑视频模板 + 建筑强约束常量
-├── app/services/video_gen_service.py                 # 任务编排 / 约束拦截 / 版本管理 / 绑定分镜
+├── app/schemas/video_gen.py                          # 模板 / 任务 / 版本 / 约束 / 参考帧 Schema
+├── app/services/video_gen_templates.py               # 42 个内置建筑视频模板 + 建筑强约束常量
+├── app/services/video_gen_service.py                 # 任务编排 / 约束拦截 / 版本管理
 ├── app/tasks/video_gen.py                            # 视频生成 Celery 任务 + 同步降级
 ├── app/api/v1/video_gen.py                           # /projects/{project_id}/ai-video 路由
 └── tests/test_phase7_ai_video.py                     # 20 项测试
@@ -115,7 +115,7 @@ SEEDREAM_IMAGE_SIZE=2K                          # Seedream 4.5：2K / 4K / 像�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/tasks` | 创建视频生成任务（202）。`generation_mode` = `image_to_video`（仅首帧）或 `first_last_frame_video`（首帧+尾帧）；`positive_prompt` 为独立视频提示词；`constraints_enabled` 默认 true；`generate_audio` 默认 false |
-| GET | `/tasks?status=&shot_id=` | 任务列表 |
+| GET | `/tasks?status=` | 任务列表 |
 | GET | `/tasks/{job_id}` | 任务详情（轮询） |
 | POST | `/tasks/{job_id}/retry` | 重试失败任务 |
 | POST | `/tasks/{job_id}/cancel` | 取消任务（并调用 Seedance DELETE） |
@@ -124,15 +124,13 @@ SEEDREAM_IMAGE_SIZE=2K                          # Seedream 4.5：2K / 4K / 像�
 ### 版本
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/versions?shot_id=` | 项目视频版本列表 |
+| GET | `/versions` | 项目视频版本列表 |
 | POST | `/versions/{version_id}/select` | 选为当前结果 |
-| POST | `/versions/{version_id}/bind` | 绑定到分镜 `{shot_id}` |
-| DELETE | `/versions/{version_id}` | 软删除（已绑定分镜的版本拒绝删除） |
+| DELETE | `/versions/{version_id}` | 软删除（被视频工程分段引用的版本拒绝删除） |
 
 ### 任务创建请求体
 ```json
 {
-  "storyboard_shot_id": null,
   "generation_mode": "image_to_video",        // 或 first_last_frame_video
   "first_frame_asset_id": "<图片素材ID>",      // 必填
   "last_frame_asset_id": "<图片素材ID>",       // 首尾帧模式必填
@@ -150,11 +148,11 @@ SEEDREAM_IMAGE_SIZE=2K                          # Seedream 4.5：2K / 4K / 像�
 ```
 
 ### 任务对象关键字段
-`VideoGenerationJob` 包含：项目 ID、可选分镜 ID、生成模式、首帧/尾帧素材 ID、模板 ID、正/负向提示词、建筑约束快照、Provider/模型、时长/比例/分辨率/随机种子/声音开关、Seedance 任务 ID、状态/进度/错误/耗时、结果素材 ID、创建人/创建时间、完整 `parameter_snapshot`（可复现）。
+`VideoGenerationJob` 包含：项目 ID、生成模式、首帧/尾帧素材 ID、模板 ID、正/负向提示词、建筑约束快照、Provider/模型、时长/比例/分辨率/随机种子/声音开关、Seedance 任务 ID、状态/进度/错误/耗时、结果素材 ID、创建人/创建时间、完整 `parameter_snapshot`（可复现）。生成结果作为独立视频素材保存；只有视频工程的 `VideoSegment.visual_asset_id` 可以建立素材绑定。
 
 ---
 
-## 四、模板清单（10 个内置建筑视频模板）
+## 四、模板清单（42 个内置建筑视频模板）
 
 | # | 模板名称 | 适用模式 | 推荐时长 | 推荐比例 | 镜头运动 |
 |---|---|---|---|---|---|
@@ -189,7 +187,7 @@ SEEDREAM_IMAGE_SIZE=2K                          # Seedream 4.5：2K / 4K / 像�
 ### 后端 pytest
 - `tests/test_provider_integrations.py`：**24 passed**（原 6 项 + Seedance 契约 8 项 + Seedream 契约 4 项 + 火山豆包 TTS 契约 6 项）
 - `tests/test_phase7_ai_video.py`：**20 passed**（模板种子 / 未选首帧拦截 / 首尾帧双图校验 / 约束冲突拦截×6 / 约束预检 / 禁解说词回退 / 修改解说词不影响任务 / 模板参数填充 / 任务查询选择绑定删除 / 参考帧列表 / 取消与幂等 / 企业模板 CRUD）
-- 全量：**151 passed**；沙箱内 `test_phase5_video` 与 `test_phase6_resumable_upload` 共 2 项因「沙箱 backend 目录文件删除权限受限」无法通过，属既有环境限制，与本次改动无关（本机/容器环境可正常通过）。
+- 当前全量：**228 passed**（含 AI 配置加密、Worker 刷新和认证限流回归测试）。
 
 ### 前端
 - `tsc -b`：**通过**
