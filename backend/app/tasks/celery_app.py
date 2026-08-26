@@ -48,6 +48,12 @@ celery_app.conf.update(
 )
 
 
+@celery_app.task(name="fastvideo.health_probe")
+def health_probe(value: str) -> dict[str, str]:
+    """无副作用的 broker/backend 探针，供真实 Celery 集成测试使用。"""
+    return {"value": value}
+
+
 @task_prerun.connect
 def refresh_ai_configuration_before_task(*args, **kwargs) -> None:
     """Keep worker-side adapters aligned with the admin settings row."""

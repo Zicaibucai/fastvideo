@@ -1,6 +1,9 @@
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["backend/tests"]
+markers = [
+  "integration: requires external services such as Redis and Celery worker",
+]
 
 [tool.ruff]
 target-version = "py311"
