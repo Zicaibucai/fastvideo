@@ -30,6 +30,8 @@ import type {
   VideoGenerationJob,
   VideoGenerationTemplate,
   VideoGenerationVersion,
+  VideoGenerationTaskCreate,
+  VideoProvider,
   ReferenceImage,
   VideoProject,
   VideoSegment,
@@ -538,7 +540,7 @@ export const videoGenApi = {
 
   // Provider / 参考帧 / 约束
   providers: (projectId: string) =>
-    api.get<any[]>(`/projects/${projectId}/ai-video/providers`),
+    api.get<VideoProvider[]>(`/projects/${projectId}/ai-video/providers`),
   providerCapabilities: (projectId: string, provider: string) =>
     api.get<Record<string, boolean>>(`/projects/${projectId}/ai-video/providers/${provider}/capabilities`),
   referenceImages: (projectId: string) =>
@@ -620,7 +622,7 @@ export const videoGenApi = {
     api.post<VideoGenerationTemplate>(`/projects/${projectId}/ai-video/template-drafts/${draftId}/publish`, payload),
 
   // 任务
-  createTask: (projectId: string, payload: Record<string, any>) =>
+  createTask: (projectId: string, payload: VideoGenerationTaskCreate) =>
     api.post<VideoGenerationJob>(`/projects/${projectId}/ai-video/tasks`, payload),
   listTasks: (projectId: string, params?: { status?: string }) =>
     api.get<VideoGenerationJob[]>(`/projects/${projectId}/ai-video/tasks`, { params }),

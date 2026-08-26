@@ -12,6 +12,17 @@ export type TaskStatus =
   | 'cancelled'
   | (string & {})
 
+export type JsonObject = Record<string, unknown>
+
+export interface VideoProvider {
+  provider: string
+  available?: boolean
+  is_mock?: boolean
+  capabilities?: Record<string, boolean>
+  default_model?: string
+  models?: string[]
+}
+
 export interface User {
   id: string
   email: string
@@ -766,6 +777,27 @@ export interface VideoGenerationJob {
   completed_at?: string
   created_at?: string
   version_count: number
+}
+
+export interface VideoGenerationTaskCreate {
+  generation_mode: 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
+  first_frame_asset_id: string
+  last_frame_asset_id?: string
+  reference_asset_ids?: string[]
+  template_id?: string | null
+  prompt_recipe?: JsonObject
+  provider?: string
+  model_name?: string
+  positive_prompt: string
+  negative_prompt?: string | null
+  duration: number
+  aspect_ratio: string
+  resolution: string
+  seed?: number | null
+  generate_audio: boolean
+  constraints_enabled: boolean
+  structure_conflict_confirmed?: boolean
+  idempotency_key?: string
 }
 
 export interface VideoGenerationVersion {

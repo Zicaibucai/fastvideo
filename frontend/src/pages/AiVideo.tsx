@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
   Alert,
@@ -76,6 +76,7 @@ import {
   versionDisplayName,
   versionDownloadName,
 } from './aiVideoUtils'
+import { useAiVideoData } from '../hooks/useAiVideoData'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -114,10 +115,6 @@ export default function AiVideo() {
     recipe: initialDraft.recipe,
   })
 
-  const [refImages, setRefImages] = useState<ReferenceImage[]>([])
-  const [templates, setTemplates] = useState<VideoGenerationTemplate[]>([])
-  const [versions, setVersions] = useState<VideoGenerationVersion[]>([])
-
   const [generationMode, setGenerationMode] = useState<'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'>(initialDraft.generationMode || 'first_last_frame_video')
   const [firstFrameId, setFirstFrameId] = useState<string>(initialDraft.firstFrameId || '')
   const [lastFrameId, setLastFrameId] = useState<string>(initialDraft.lastFrameId || '')
@@ -138,14 +135,32 @@ export default function AiVideo() {
   const [resolution, setResolution] = useState(normalizeResolution(initialDraft.resolution))
   const [generateAudio, setGenerateAudio] = useState(initialDraft.generateAudio ?? false)
   const [modelName, setModelName] = useState(initialDraft.modelName || '')
-  const [providers, setProviders] = useState<any[]>([])
   const [selectedProvider, setSelectedProvider] = useState('seedance')
-  const [providerCaps, setProviderCaps] = useState<Record<string, boolean>>({})
 
   const [submitting, setSubmitting] = useState(false)
   const [masterLoading, setMasterLoading] = useState(false)
-  const [activeJobId, setActiveJobId] = useState<string | null>(null)
-  const [activeJob, setActiveJob] = useState<VideoGenerationJob | null>(null)
+
+  const onTaskComplete = useCallback((job: VideoGenerationJob) => {
+    setSubmitting(false)
+    if (job.status === 'success') {
+      message.success(job.asset_status === 'ready' ? '视频生成完成，已写入素材库' : '视频生成完成')
+    } else if (job.status === 'failed') {
+      message.error(job.error_message || '视频生成失败，可点击重试')
+    }
+  }, [message])
+
+  const {
+    activeJob,
+    activeJobId,
+    providerCaps,
+    providers,
+    refImages,
+    templates,
+    versions,
+    refresh: fetchAll,
+    setActiveJob,
+    setActiveJobId,
+  } = useAiVideoData({ projectId, selectedProvider, onTaskComplete })
 
   const [activeTab, setActiveTab] = useState('exterior')
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -228,51 +243,21 @@ export default function AiVideo() {
     return () => window.clearTimeout(timer)
   }, [projectId, promptRecipe, advancedEnabled, prompt, negativePrompt, modelName, duration, firstFrameId, lastFrameId, referenceAssetIds, selectedTemplateId, generationMode, aspectRatio, resolution, generateAudio, constraintsEnabled, seedLock, seed])
 
-  const fetchAll = () => {
-    Promise.all([
-      videoGenApi.templates(projectId),
-      videoGenApi.referenceImages(projectId),
-      videoGenApi.versions(projectId),
-    ])
-      .then(([t, r, v]) => {
-        setTemplates(t.data)
-        setRefImages(r.data)
-        setVersions(v.data)
-      })
-      .catch(() => {})
-  }
-
-  useEffect(() => {
-    fetchAll()
-  }, [projectId])
-
-  // 当前新任务只开放 Seedance，避免高级配方在不同视频模型间产生语义漂移。
-  useEffect(() => {
-    videoGenApi
-      .providers(projectId)
-      .then((res) => {
-        const seedance = (res.data || []).find((p: any) => p.provider === 'seedance')
-        const list = seedance ? [seedance] : []
-        setProviders(list)
-        const def = seedance
-        if (def) {
-          setSelectedProvider('seedance')
-          setProviderCaps(def.capabilities || {})
-          setModelName(def.default_model || (def.models || [])[0] || '')
-        }
-      })
-      .catch(() => {})
-  }, [projectId])
 
   const currentProvider = useMemo(
     () => providers.find((p) => p.provider === selectedProvider) || null,
     [providers, selectedProvider],
   )
 
+  useEffect(() => {
+    const provider = providers.find((item) => item.provider === selectedProvider)
+    if (!provider) return
+    setModelName((current) => current || provider.default_model || provider.models?.[0] || '')
+  }, [providers, selectedProvider])
+
   const handleProviderChange = (provider: string) => {
     const p = providers.find((x) => x.provider === provider)
     setSelectedProvider(provider)
-    setProviderCaps(p?.capabilities || {})
     setModelName(p?.default_model || (p?.models || [])[0] || '')
     if (p && p.capabilities?.first_last_frame_video !== true && generationMode === 'first_last_frame_video') {
       setGenerationMode('image_to_video')
@@ -287,39 +272,6 @@ export default function AiVideo() {
       setGenerateAudio(false)
     }
   }
-
-  // 任务轮询
-  useEffect(() => {
-    if (!activeJobId) return
-    let stopped = false
-    let timer: ReturnType<typeof setInterval>
-    const tick = async () => {
-      try {
-        const response = await videoGenApi.getTask(projectId, activeJobId)
-        if (stopped) return
-        setActiveJob(response.data)
-        if (['success', 'failed', 'cancelled'].includes(response.data.status)) {
-          clearInterval(timer)
-          setActiveJobId(null)
-          setSubmitting(false)
-          if (response.data.status === 'success') {
-            message.success(response.data.asset_status === 'ready' ? '视频生成完成，已写入素材库' : '视频生成完成')
-          } else if (response.data.status === 'failed') {
-            message.error(response.data.error_message || '视频生成失败，可点击重试')
-          }
-          fetchAll()
-        }
-      } catch {
-        // 网络瞬时失败时继续轮询
-      }
-    }
-    void tick()
-    timer = setInterval(() => void tick(), 1500)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [activeJobId, projectId, message])
 
   const firstFrame = useMemo(() => refImages.find((i) => i.id === firstFrameId) || null, [refImages, firstFrameId])
   const lastFrame = useMemo(() => refImages.find((i) => i.id === lastFrameId) || null, [refImages, lastFrameId])
@@ -382,7 +334,7 @@ export default function AiVideo() {
     try {
       await assetApi.upload(projectId, file, file.name)
       message.success('参考帧已上传到素材库，请选择')
-      videoGenApi.referenceImages(projectId).then((res) => setRefImages(res.data))
+      void fetchAll()
     } catch {
       // 拦截器已提示
     }
