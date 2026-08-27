@@ -13,7 +13,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](backend/requirements.txt)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](backend/Dockerfile)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![Tests](https://img.shields.io/badge/backend_tests-228_passed-22C55E)](#测试与构建)
+[![Tests](https://img.shields.io/badge/backend_tests-232_passed-22C55E)](#测试与构建)
 
 [核心能力](#核心能力) · [产品工作流](#产品工作流) · [快速开始](#快速开始) · [AI 服务](#ai-服务配置) · [项目结构](#项目结构)
 
@@ -225,7 +225,7 @@ fastvideo/
 │   │   ├── schemas/        # Pydantic 数据结构
 │   │   ├── services/       # 领域与媒体处理逻辑
 │   │   └── tasks/          # Celery 异步任务
-│   ├── alembic/            # 19 个数据库迁移
+│   ├── alembic/            # 20 个数据库迁移
 │   └── tests/              # 后端测试
 ├── frontend/
 │   └── src/
@@ -253,8 +253,8 @@ npm run build
 
 当前仓库基线：
 
-- 后端：**228 passed**
-- 数据库迁移：`0019` head
+- 后端：**232 passed，1 skipped**
+- 数据库迁移：`0020` head
 - 前端：TypeScript 检查及 Vite 生产构建通过
 - 真实 Seedance 付费调用不包含在自动测试中；相关契约使用 Mock HTTP 验证
 
@@ -286,7 +286,6 @@ ALLOW_PUBLIC_REGISTRATION=false
 - [task_plan.md](task_plan.md) — 开发计划与阶段记录
 - [PHASE7_AI_VIDEO_DELIVERY.md](PHASE7_AI_VIDEO_DELIVERY.md) — AI 视频阶段交付说明
 - [AI_VIDEO_TEMPLATE_CREATOR_PLAN.md](AI_VIDEO_TEMPLATE_CREATOR_PLAN.md) — 视频模板制作方案
-- [PROJECT_EVALUATION.md](PROJECT_EVALUATION.md) — 项目评估与技术债
 - [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md) — 第三方素材发布审计
 
 ---

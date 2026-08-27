@@ -371,13 +371,17 @@ def video_providers_info() -> list[dict]:
     for provider in ("seedance",):
         models = VIDEO_PROVIDER_MODELS[provider]
         adapter = build_video_adapter(provider)
+        # Provider 能力描述与本机是否已经配置 API Key 是两个独立维度。
+        # 未配置 Key 时仍向前端暴露 Seedance 支持的生成模式，只通过
+        # ``available`` 阻止实际提交，避免能力列表退化为空字典。
+        capability_adapter = adapter or SeedanceVideoAdapter(api_key="")
         configured_model = provider_config(provider).get("model")
         available_models = list(dict.fromkeys([configured_model, *models])) if configured_model else models
         result.append(
             {
                 "provider": provider,
                 "available": adapter is not None,
-                "capabilities": adapter.capabilities() if adapter else {},
+                "capabilities": capability_adapter.capabilities(),
                 "models": available_models,
                 "default_model": configured_model or models[0],
                 "is_active": active.provider == provider,
