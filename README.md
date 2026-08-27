@@ -117,11 +117,13 @@ flowchart LR
 需要 Docker Desktop 或 Docker Engine + Compose v2。
 
 ```bash
-git clone https://github.com/Zicaibucai/fastvideo.git
-cd fastvideo
+git clone https://github.com/Zicaibucai/VI_studio.git
+cd VI_studio
 cp .env.example .env
 docker compose up -d --build
 ```
+
+仓库展示名称为 **微影 VI Studio**；Docker 服务名和部分历史环境变量仍保留 `fastvideo` 兼容标识，不影响产品名称或运行方式。
 
 启动完成后访问：
 
@@ -293,7 +295,7 @@ VOLCENGINE_TTS_API_KEY=your_volcengine_tts_key
 ## 项目结构
 
 ```text
-fastvideo/
+VI_studio/
 ├── backend/
 │   ├── app/
 │   │   ├── adapters/       # LLM、图像、视频、TTS、OCR 适配器
