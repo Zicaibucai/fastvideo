@@ -1,120 +1,74 @@
 <div align="center">
 
-<img src="docs/readme-hero.svg" alt="微影 VI Studio — 建筑工程 AI 投标视频工作室" width="100%" />
+<img src="docs/readme-hero.svg" alt="微影 VI studio — 建设项目影像工作台" width="100%" />
 
-# 微影 VI Studio
+# 微影 VI studio
 
-### 建筑工程 AI 投标视频工作室
+### 建设项目影像工作台
 
-从招标资料到 1080P 成片，把文档理解、事实核验、分镜、画面、配音与视频合成连接成一条可追溯的生产链路。
+面向建筑工程投标场景，将项目资料、解说词、分镜、AI 画面、配音与视频制作放在同一个工作流中。
 
 [![React](https://img.shields.io/badge/React-18-149ECA?logo=react&logoColor=white)](frontend/package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](frontend/tsconfig.json)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](backend/requirements.txt)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](backend/Dockerfile)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![Tests](https://img.shields.io/badge/backend_tests-232_passed-22C55E)](#测试与构建)
 
-[核心能力](#核心能力) · [产品工作流](#产品工作流) · [快速开始](#快速开始) · [AI 服务](#ai-服务配置) · [交付检查](#交付前检查) · [项目结构](#项目结构)
+[功能概览](#功能概览) · [使用流程](#使用流程) · [快速开始](#快速开始) · [AI 服务](#ai-服务) · [项目结构](#项目结构)
 
 </div>
 
 ---
 
-## 项目简介
+## 项目介绍
 
-微影 VI Studio 面向建筑施工企业的投标视频制作场景。系统读取 PDF、DOCX、TXT 等项目资料，提取带来源的工程事实与评分点，辅助生成解说词和分镜，再完成建筑画面渲染、AI 视频、配音、字幕及多分段合成，最终导出 **16:9 / 1080P / H.264 MP4**。
+**微影 VI studio** 是一套面向建筑工程投标视频的 AI 辅助制作平台。它以“投标项目”为核心，帮助用户整理项目文件、核对工程信息、编辑解说词与分镜，并继续完成画面、AI 视频、配音、字幕和成片导出。
 
-项目重点不是简单地“让 AI 生成一段视频”，而是让每个关键结论能够回到资料原文，让每个画面、配音和视频版本能够被选择、恢复和追踪。
+项目的重点是串联投标视频的完整制作过程，减少在文档、AI 生成工具和视频编辑软件之间反复切换。它不是通用视频剪辑器，而是围绕建筑项目资料和投标表达设计的业务工作台。
 
-### 你可以用它完成什么
+> [!NOTE]
+> AI 用于辅助理解资料和生成视听内容。工程参数、施工表达和最终成片仍应由专业人员审核。
 
-- **把资料变成可核验内容**：从招标文件中提取面积、工期、楼层、施工方法、评分点等信息，并保留页码、原文和冲突状态。
-- **把内容变成可编辑脚本**：基于已确认事实生成解说词，拆分为分镜，支持人工修改、排序、复制、恢复历史版本。
-- **把分镜变成视听素材**：为每个分镜绑定建筑图片或视频，调用 AI 生成画面，选择音色生成配音，并自动建立字幕时间轴。
-- **把素材变成交付文件**：在视频工程中完成时长适配、转场、音乐、Logo、片头片尾和字幕烧录，导出 MP4、SRT 与交付报告。
+## 功能概览
 
-### 典型使用对象
-
-投标项目负责人负责事实确认和交付检查，技术人员负责施工方案与工程参数，视频编辑负责分镜、画面和时间轴，品牌或管理人员负责模板、音色授权和最终版本审核。不同角色可以在同一个项目中沿用版本记录，减少“改了脚本却忘记重做配音或字幕”的问题。
-
-> [!IMPORTANT]
-> AI 画面仅用于视觉表达。正式投标前仍需人工复核楼层、轮廓、道路、设备位置、工程参数和音色授权状态。
-
-## 核心能力
-
-| 模块 | 能力 |
+| 工作区 | 主要功能 |
 | --- | --- |
-| 文档与证据 | PDF / DOCX / TXT 解析、扫描页 OCR、表格与目录提取、SHA-256 去重、最大 1GB 断点续传 |
-| 工程事实台账 | 面积、工期、日期、高度、层数、金额与评分项等关键参数提取；保留页码、原文、冲突和人工确认状态 |
-| 解说词与分镜 | 基于已确认事实生成 3～5 分钟解说词，拆分为可编辑分镜，并统计评分点覆盖情况 |
-| 建筑画面制作 | 模型截图渲染、12 种预设、局部重绘、扩图、清晰度增强、版本对比及分镜绑定 |
-| AI 视频生成 | 42 种建筑视频模板，支持首帧、首尾帧和多参考图工作流；保存完整参数快照，支持取消、重试与版本选择 |
-| 提示词大师 | Kimi K3 多模态理解参考图，生成镜头提示词；高级施工工作台支持 WBS、状态转换、时间轴与空间锚点 |
-| 配音与字幕 | 企业音色模板、发音词典、时长适配、音频版本管理、WAV / MP3 / SRT 导出与授权检查 |
-| 视频工程 | 分段渲染、转场、Ken Burns、背景音乐自动压低、Logo / 片头片尾、字幕烧录和增量缓存 |
-| 安全与审计 | HttpOnly Cookie、来源校验、上传魔数校验、路径穿越防护、Provider Key 加密存储和操作审计 |
+| 项目管理 | 创建和管理投标项目，查看资料、任务进度与 AI 使用情况 |
+| 招标资料 | 上传 PDF、DOCX 或 TXT 文件，在线阅读解析内容 |
+| 工程信息核对 | 整理项目概况和关键数字，保留对应的资料来源，便于人工确认 |
+| 解说词与分镜 | 辅助生成解说词，拆分和编辑分镜，管理镜头顺序与历史版本 |
+| 画面与 AI 视频 | 上传建筑或 BIM 参考图，制作画面版本，根据参考帧和提示词生成视频 |
+| 配音与字幕 | 按分镜生成和管理配音，调整朗读文本，维护字幕时间轴 |
+| 素材与视频工程 | 统一管理图片、视频和音频素材，组织分段、背景音乐和字幕后导出成片 |
 
-## 核心对象与绑定关系
-
-微影 VI Studio 以“项目”为边界组织数据，所有生成结果都能追溯到输入对象：
-
-| 对象 | 主要内容 | 下游绑定 |
-| --- | --- | --- |
-| 投标项目 | 招标资料、工程事实、评分点 | 文稿、分镜、素材与导出任务的归属边界 |
-| 分镜 / 解说词 | 标题、画面描述、原始解说词、规范化朗读文本 | 配音版本、字幕句段、视频工程分段 |
-| 配音版本 | 音色、语速、音量、音频文件、生成状态 | 当前正式版本或视频工程手动选择的版本 |
-| 字幕句段 | 文本、开始/结束时间、断句置信度 | 分段预览烧录、整片字幕、SRT 导出 |
-| 视频工程分段 | 画面素材、时长、适配策略、字幕开关、转场 | 分段 MP4 与整片时间轴 |
-| 导出任务 | 演示版 / 正式版、进度、预检结果、报告 | 最终 MP4、SRT、报告和历史版本 |
-
-配音生成后会创建独立的音频版本和字幕数据；视频工程读取当前正式配音或分段指定版本。开启“字幕”并重新合成分段后，字幕会以 ASS 形式烧录进画面，整片导出会自动重建已失效的分段。
-
-## 产品工作流
+## 使用流程
 
 ```mermaid
 flowchart LR
-    A[上传招标资料] --> B[文档解析与 OCR]
-    B --> C[工程事实 / 评分点]
-    C --> D[解说词与分镜]
-    D --> E[画面渲染 / AI 视频]
-    D --> F[配音 / 字幕]
-    E --> G[视频工程]
+    A[创建投标项目] --> B[上传项目资料]
+    B --> C[核对工程信息]
+    C --> D[生成解说词与分镜]
+    D --> E[准备画面与 AI 视频]
+    D --> F[生成配音与字幕]
+    E --> G[组装视频工程]
     F --> G
-    G --> H[1080P 成片 / SRT / 素材包]
+    G --> H[检查并导出]
 ```
 
-### 1. 资料进入系统
+推荐使用顺序：
 
-- 普通文件单次上传上限为 30MB；更大文件自动使用 10MB 分片上传。
-- 支持 1GB 以内 PDF、DOCX、TXT 的断点续传。
-- 扫描页可调用 Tesseract OCR；OCR 失败不会阻断其余页面解析。
-
-### 2. 从原文建立事实
-
-- 自动提取工程参数与评分点，并保存来源页码、原文片段和确认状态。
-- 多来源出现冲突时标记为 `conflict`，不会静默选择一个结果。
-- 未验证数据不会进入正式解说词。
-
-### 3. 生成并编辑内容
-
-- 解说词可拆分为 10+ 分镜，支持排序、复制、删除、重新生成和历史恢复。
-- 模型截图保留 V0 原图，生成结果从 V1 起递增保存。
-- 更换已绑定画面后，相关视频分段会被标记为需要重建。
-
-### 4. 合成与交付
-
-- 支持图片动态化、视频素材标准化、转场、音乐、Logo、片头片尾及中文字幕。
-- 基于输入哈希复用未变化的分段，减少重复渲染。
-- 演示版与正式版使用不同预检规则；正式版会拦截 Mock 配音、未授权音色和缺失素材。
-- 分段预览只重建当前分段；整片导出会按需重建所有待处理或缓存失效的分段。
-- 导出同时保存 MP4、SRT 和 JSON 交付报告，素材库保留历史版本，便于回滚和复核。
+1. 创建投标项目，录入基本信息。
+2. 上传招标文件、施工资料和评分办法。
+3. 查看文档解析结果，对系统识别的工程信息进行确认或修正。
+4. 生成解说词和分镜，根据项目表达需求进行人工编辑。
+5. 为分镜准备图片、AI 视频、配音和字幕。
+6. 在视频工程中检查分段、时长和背景音乐，完成后导出。
 
 ## 快速开始
 
-### Docker Compose
+### 使用 Docker Compose
 
-需要 Docker Desktop 或 Docker Engine + Compose v2。
+需要安装 Docker Desktop，或 Docker Engine 与 Compose v2。
 
 ```bash
 git clone https://github.com/Zicaibucai/VI_studio.git
@@ -123,22 +77,20 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-仓库展示名称为 **微影 VI Studio**；Docker 服务名和部分历史环境变量仍保留 `fastvideo` 兼容标识，不影响产品名称或运行方式。
+启动后可访问：
 
-启动完成后访问：
-
-- Web：<http://localhost:5173>
+- Web 工作台：<http://localhost:5173>
 - API 文档：<http://localhost:8000/docs>
 - MinIO 控制台：<http://localhost:9001>
 
-开发环境默认管理员：
+演示环境的默认管理员信息来自 `.env`：
 
 ```text
 admin@fastvideo.cn / admin123456
 ```
 
 > [!WARNING]
-> 以上账号只用于本地演示。共享或生产环境必须替换 `SECRET_KEY`、`ADMIN_PASSWORD`、`POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD`，并关闭公开注册。
+> 默认账号和示例密码仅用于本地开发。在共享或生产环境启动前，请先修改 `.env` 中的密钥、管理员密码、数据库密码和 MinIO 密码。
 
 查看运行状态或停止服务：
 
@@ -147,26 +99,9 @@ docker compose ps
 docker compose down
 ```
 
-### 独立交付测试（SQLite 快照）
-
-交付测试可以与源项目分开运行，不依赖源项目的数据库。将 `.env` 中的数据库配置切换为 SQLite，并指定独立快照路径：
-
-```dotenv
-DATABASE_URL=sqlite:///./app.db
-DELIVERY_SQLITE_DB=./backend/app.db
-```
-
-然后重新创建 API 和 Worker：
-
-```bash
-docker compose up -d --build api worker
-```
-
-`backend/app.db`、`.env`、MinIO 对象和上传文件属于运行时数据，不会提交到 Git；换机器部署时需要按实际环境单独迁移数据库和素材对象。
-
 ### 本地开发
 
-推荐环境：Python 3.11、Node.js 20+、FFmpeg。若不使用 Celery，可将 `.env` 配置为 SQLite + 本地存储 + 同步任务：
+建议使用 Python 3.11、Node.js 20+ 和 FFmpeg。如果暂时不需要 Redis / Celery，可在 `.env` 中使用 SQLite、本地文件存储和同步任务：
 
 ```dotenv
 DATABASE_URL=sqlite:///./app.db
@@ -189,7 +124,7 @@ alembic upgrade head
 python run_dev.py
 ```
 
-另开终端启动前端：
+另开一个终端启动前端：
 
 ```bash
 cd frontend
@@ -197,100 +132,33 @@ npm install
 npm run dev
 ```
 
-启用 Celery 时，还需运行 Redis 和 Worker；macOS 本地环境也可以直接使用 `./start_dev.sh` 一次启动 API、Worker 与前端，使用 `./stop_dev.sh` 停止。
+macOS 本地开发也可使用 `./start_dev.sh` 启动 API、Worker 和前端，使用 `./stop_dev.sh` 停止。
 
-## Mock 演示模式
+## AI 服务
 
-将对应 Provider 设置为 `disabled`，即可在没有付费 API Key 的情况下体验完整页面和任务流程。Mock 模式会生成可访问的演示文本、图片与音频；正式成片预检会明确区分 Mock 与真实素材。
+项目将文本、图像、视频和语音能力分别封装，可通过 `.env` 或页面中的“账号与 AI 设置”配置。
 
-建议体验路径：
+| 能力 | 当前适配 |
+| --- | --- |
+| 文本理解与提示词 | Kimi、DeepSeek、OpenAI 或演示模式 |
+| 图像生成 | Seedream 或演示模式 |
+| 视频生成 | Seedance、MiniMax 或演示模式 |
+| 语音合成 | 火山豆包语音、OpenAI 或演示模式 |
 
-```text
-新建项目 → 上传资料 → 参数台账 → 解说词与分镜
-        → 画面制作 / AI 视频 → 配音制作 → 视频工程 → 导出
-```
+没有配置付费服务时，可将对应的 Provider 设为 `disabled` 使用演示模式，用于体验页面和验证工作流。演示结果不代表真实模型效果。
 
-Mock 只用于验证页面、任务状态和数据绑定，不代表真实模型效果。切换到真实 Provider 后：
-
-1. 先在“账号与 AI 设置”中保存对应 Provider 的 Key，并确认页面显示的是该 Provider 的掩码。
-2. 在“画面制作”“AI 视频”或“配音制作”中选择真实模型、音色和参数。
-3. 生成结果进入版本列表；需要替换正式结果时，明确选择对应版本后再进入视频工程。
-4. 正式导出前查看预检结果，处理缺失画面、过期配音、未授权音色和来源冲突。
-
-配音服务尤其需要注意：火山豆包 TTS 使用语音技术产品线的接口和 API Key，不能把火山方舟 Ark Key 当作 TTS Key 使用。音色 ID（例如 `ICL_uranus_zh_male_ruyacaijun_tob`）只决定发音人，不能绕过 Provider 的凭证或授权校验。
-
-## AI 服务配置
-
-所有 AI 服务通过 `backend/app/adapters/` 统一接入。缺少 Key 时可以切换到 Mock；不支持的能力会在提交前被拦截，不会静默降级。
-
-| 能力 | 推荐 Provider | 说明 |
-| --- | --- | --- |
-| 文本结构化 / 多模态 | Kimi K3 | 工程信息、解说词、提示词大师 |
-| 图生图 | Seedream 4.5 | 建筑参考图渲染、扩图与图像增强 |
-| 图生视频 | Seedance 2.0 | 当前新建视频任务的唯一真实通道 |
-| 语音合成 | 火山豆包 TTS 2.0 | 与火山方舟 Ark 使用不同类型的 API Key |
-| OCR | Tesseract / Mock | 扫描文档文字识别 |
-
-推荐配置示例：
-
-```dotenv
-AI_LLM_PROVIDER=kimi
-AI_LLM_MODEL=kimi-k3
-KIMI_API_KEY=your_moonshot_key
-
-AI_IMAGE_PROVIDER=seedream
-AI_IMAGE_MODEL=doubao-seedream-4-5-251128
-
-AI_VIDEO_PROVIDER=seedance
-AI_VIDEO_MODEL=doubao-seedance-2-0-260128
-ARK_API_KEY=your_ark_key
-
-AI_TTS_PROVIDER=volcengine
-VOLCENGINE_TTS_API_KEY=your_volcengine_tts_key
-```
-
-- Seedream 与 Seedance 同属火山方舟，可共用 `ARK_API_KEY`。
-- 豆包语音合成 Key 需要在火山引擎语音技术控制台单独创建。
-- 修改环境变量或在设置页更新 Provider 后，需要确保 API 与 Celery Worker 都已刷新配置。
-- 切勿把 `.env` 或真实 API Key 提交到 Git。
-
-## 交付前检查
-
-建议按下面的顺序做最终检查：
-
-1. **核对事实**：处理 `unverified` 和 `conflict` 状态，确认面积、工期、楼层、设备和施工参数都能回到资料页码。
-2. **确认解说词**：检查连续文稿、分镜顺序和每段朗读文本；保存文稿后再生成或更新配音。
-3. **确认配音**：试听目标音色，确认音频版本为正式版本，检查语速、时长和授权状态。
-4. **确认字幕**：检查字幕断句和时间轴；视频工程中打开分段字幕开关，并重新合成需要更新的分段。
-5. **确认画面**：每个分段绑定正确的图片或视频素材，检查时长适配、转场和画面比例。
-6. **运行预检**：先使用演示版验证完整链路，再使用正式版预检；正式版会阻止 Mock 结果、缺失素材、过期配音和未授权音色。
-7. **验收文件**：播放最终 MP4，下载同版本 SRT 和 JSON 报告，并在素材库保留可回滚的历史版本。
-
-## 常见问题
-
-### 为什么音色能选中，但配音生成失败？
-
-音色列表属于应用侧模板，真正生成还需要 Provider 接口接受当前凭证。火山豆包 TTS 使用 OpenSpeech 语音接口和独立的 TTS API Key；如果返回 `Invalid X-Api-Key`，应检查接口地址、资源 ID、Key 类型和 Worker 是否已刷新，而不是重复添加音色。
-
-### 为什么时间轴有字幕，视频画面却没有？
-
-字幕数据会先保存到配音版本，再在视频工程分段合成时烧录到画面。修改字幕开关、配音或样式后必须重新合成分段；整片导出会自动重建缓存失效的分段。
-
-### 为什么素材库视频提示服务器内部错误？
-
-素材记录和对象存储文件必须同时存在。迁移数据库或切换环境时，需要同步迁移 MinIO 对象（或本地存储目录），不能只迁移数据库记录。
+常用配置项可参考 [`.env.example`](.env.example)。请勿将真实 API Key 提交到 Git。
 
 ## 技术架构
 
 | 层级 | 技术 |
 | --- | --- |
-| Web | React 18 · TypeScript · Vite 6 · Ant Design 5 · Axios · React Router |
-| API | Python 3.11 · FastAPI · Pydantic v2 · SQLAlchemy 2 · Alembic |
-| 数据 | PostgreSQL 16 · SQLite 本地降级 · MinIO / 本地文件存储 |
-| 异步任务 | Redis 7 · Celery 5 · 同步线程池降级 |
-| 媒体处理 | FFmpeg · MoviePy · ASS / SRT · Pillow |
-| AI 集成 | Adapter + 能力矩阵 + Mock |
-| 部署 | Docker Compose · Nginx |
+| 前端 | React 18、TypeScript、Vite、Ant Design |
+| 后端 | FastAPI、Pydantic、SQLAlchemy、Alembic |
+| 数据与任务 | PostgreSQL / SQLite、Redis、Celery |
+| 文件存储 | MinIO 或本地文件系统 |
+| 媒体处理 | FFmpeg、MoviePy、Pillow |
+| 部署 | Docker Compose、Nginx |
 
 ## 项目结构
 
@@ -298,76 +166,49 @@ VOLCENGINE_TTS_API_KEY=your_volcengine_tts_key
 VI_studio/
 ├── backend/
 │   ├── app/
-│   │   ├── adapters/       # LLM、图像、视频、TTS、OCR 适配器
-│   │   ├── api/v1/         # FastAPI 路由
-│   │   ├── core/           # 配置、数据库、认证、存储、日志
-│   │   ├── models/         # SQLAlchemy 模型
-│   │   ├── schemas/        # Pydantic 数据结构
-│   │   ├── services/       # 领域与媒体处理逻辑
-│   │   └── tasks/          # Celery 异步任务
-│   ├── alembic/            # 20 个数据库迁移
+│   │   ├── adapters/       # AI 服务适配
+│   │   ├── api/v1/         # FastAPI 接口
+│   │   ├── core/           # 配置、数据库、安全与存储
+│   │   ├── models/         # 数据模型
+│   │   ├── services/       # 业务与媒体处理
+│   │   └── tasks/          # 异步任务
+│   ├── alembic/            # 数据库迁移
 │   └── tests/              # 后端测试
 ├── frontend/
 │   └── src/
 │       ├── api/            # API 客户端与类型
 │       ├── components/     # 通用组件
 │       ├── pages/          # 业务页面
-│       └── stores/         # 认证状态
+│       └── stores/         # 前端状态
+├── docs/                    # README 视觉资源
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
 ```
 
-## 测试与构建
+## 开发检查
 
 ```bash
 # 后端测试
 cd backend
 pytest -q
 
-# 前端类型检查与生产构建
+# 前端测试与构建
 cd frontend
+npm test
 npm run build
 ```
 
-当前仓库基线：
+## 使用说明
 
-- 后端：**232 passed，1 skipped**
-- 数据库迁移：`0020` head
-- 前端：TypeScript 检查及 Vite 生产构建通过
-- 真实 Seedance 付费调用不包含在自动测试中；相关契约使用 Mock HTTP 验证
-
-## 安全与生产部署
-
-- 登录态使用 `HttpOnly` Cookie，浏览器端不在 `localStorage` 保存 JWT。
-- 文件 URL 不接受 `?token=`；Bearer Token 仅保留给脚本或服务端客户端。
-- Provider Key 加密落库，接口只显示掩码；更换 `SECRET_KEY` 前需迁移或重新录入历史 Key。
-- 生产环境建议设置：
-
-```dotenv
-APP_ENV=production
-DEBUG=false
-AUTH_COOKIE_SECURE=true
-ALLOW_PUBLIC_REGISTRATION=false
-```
-
-- 必须通过 HTTPS 暴露服务，并配置唯一强密码、跨域白名单、备份、日志留存与对象存储权限。
-
-## 已知边界
-
-- 建筑结构一致性检测属于辅助检查，不能替代 BIM / 图纸审核和人工复核。
-- 当前不开放文生视频；AI 视频必须由首帧、首尾帧或多参考图驱动。
-- 新建 AI 视频任务只调用 Seedance；MiniMax 适配代码仅保留历史兼容。
-- 仓库中的第三方样片素材尚未完成公开授权审计，对外发布前请阅读 [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md) 并替换或补齐授权。
-
-## 相关文档
-
-- [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md) — 第三方素材发布审计
+- 仓库中的一部分 `fastvideo` 服务名、数据库名和环境变量用于保持旧版部署兼容；项目对外名称统一为 **微影 VI studio**。
+- 真实 AI 服务需要自行申请 API 凭证，可用性、价格与生成效果以相应服务商为准。
+- 对外发布第三方样片或素材前，请查看 [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md) 并确认授权。
 
 ---
 
 <div align="center">
 
-**微影 VI Studio · 让投标视频从“手工拼接”变成“有据可查的工程化生产”。**
+**微影 VI studio · 让建筑投标视频制作更连贯、更清晰。**
 
 </div>
