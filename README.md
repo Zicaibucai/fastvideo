@@ -283,8 +283,6 @@ ALLOW_PUBLIC_REGISTRATION=false
 
 ## 相关文档
 
-- [task_plan.md](task_plan.md) — 开发计划与阶段记录
-- [AI_VIDEO_TEMPLATE_CREATOR_PLAN.md](AI_VIDEO_TEMPLATE_CREATOR_PLAN.md) — 视频模板制作方案
 - [THIRD_PARTY_ASSETS.md](THIRD_PARTY_ASSETS.md) — 第三方素材发布审计
 
 ---
