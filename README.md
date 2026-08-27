@@ -156,8 +156,6 @@ npm run dev
 
 将对应 Provider 设置为 `disabled`，即可在没有付费 API Key 的情况下体验完整页面和任务流程。Mock 模式会生成可访问的演示文本、图片与音频；正式成片预检会明确区分 Mock 与真实素材。
 
-演示资料位于：[sample_data/东部新城科创中心招标文件.txt](sample_data/东部新城科创中心招标文件.txt)
-
 建议体验路径：
 
 ```text
@@ -233,7 +231,6 @@ fastvideo/
 │       ├── components/     # 通用组件
 │       ├── pages/          # 业务页面
 │       └── stores/         # 认证状态
-├── sample_data/            # 虚构演示资料
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
