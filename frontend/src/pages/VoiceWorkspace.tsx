@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  App,
   Card,
   Typography,
   Space,
@@ -74,8 +75,9 @@ const QUALITY_STATUS_MAP: Record<string, { label: string; color: string }> = {
 export default function VoiceWorkspace() {
   const { projectId = '' } = useParams()
   const navigate = useNavigate()
+  const { message } = App.useApp()
   const [shots, setShots] = useState<StoryboardShot[]>([])
-  const [selectedShot, setSelectedShot] = useState<StoryboardShot | null>(null)
+  const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [templates, setTemplates] = useState<VoiceTemplate[]>([])
   const [versions, setVersions] = useState<AudioVersion[]>([])
   const [estimate, setEstimate] = useState<VoiceEstimate | null>(null)
@@ -97,9 +99,23 @@ export default function VoiceWorkspace() {
   const [providerCaps, setProviderCaps] = useState<Record<string, boolean>>({})
   const [provider, setProvider] = useState('mock')
   const [recentJobs, setRecentJobs] = useState<VoiceJob[]>([])
+  const [normalizedTextEdited, setNormalizedTextEdited] = useState(false)
+  const detailRequestRef = useRef(0)
 
-  // 加载基础数据
-  const fetchAll = () => {
+  // 配音工作区不保存另一份解说词；始终以当前项目的解说词分镜为唯一数据源。
+  const fetchScripts = useCallback(async () => {
+    if (!projectId) return
+    const response = await storyboardApi.list(projectId)
+    const nextShots = response.data
+    setShots(nextShots)
+    setSelectedShotId((current) => {
+      if (current && nextShots.some((shot) => shot.id === current)) return current
+      return nextShots[0]?.id || null
+    })
+  }, [projectId])
+
+  // 加载项目解说词、配音模板与 Provider 能力。
+  const fetchAll = useCallback(() => {
     Promise.all([
       storyboardApi.list(projectId),
       voiceTemplateApi.list(),
@@ -107,6 +123,10 @@ export default function VoiceWorkspace() {
     ])
       .then(([s, t, p]) => {
         setShots(s.data)
+        setSelectedShotId((current) => {
+          if (current && s.data.some((shot) => shot.id === current)) return current
+          return s.data[0]?.id || null
+        })
         setTemplates(t.data)
         if (p.data[0]) {
           setProvider(p.data[0].provider)
@@ -114,9 +134,27 @@ export default function VoiceWorkspace() {
         }
       })
       .catch(() => {})
-  }
+  }, [projectId])
 
-  useEffect(fetchAll, [projectId])
+  useEffect(() => {
+    setSelectedShotId(null)
+    fetchAll()
+  }, [fetchAll])
+
+  // 从解说词页返回、切换标签页或后台生成完成后，自动拉取最新文稿。
+  useEffect(() => {
+    const syncWhenVisible = () => {
+      if (document.visibilityState === 'visible') fetchScripts().catch(() => {})
+    }
+    window.addEventListener('focus', syncWhenVisible)
+    document.addEventListener('visibilitychange', syncWhenVisible)
+    const timer = window.setInterval(syncWhenVisible, 15000)
+    return () => {
+      window.removeEventListener('focus', syncWhenVisible)
+      document.removeEventListener('visibilitychange', syncWhenVisible)
+      window.clearInterval(timer)
+    }
+  }, [fetchScripts])
 
   // 轮询当前任务
   useEffect(() => {
@@ -131,12 +169,17 @@ export default function VoiceWorkspace() {
   useEffect(() => {
     if (!projectId) return
     const load = () => {
-      voiceApi.jobs(projectId).then((res) => setRecentJobs(res.data)).catch(() => {})
+      voiceApi.jobs(projectId).then((res) => {
+        setRecentJobs(res.data)
+        if (res.data.some((job) => ['queued', 'running', 'retrying'].includes(job.status))) {
+          fetchScripts().catch(() => {})
+        }
+      }).catch(() => {})
     }
     load()
     const timer = setInterval(load, 5000)
     return () => clearInterval(timer)
-  }, [projectId])
+  }, [fetchScripts, projectId])
 
   const filteredShots = useMemo(() => {
     if (shotFilter === 'missing') return shots.filter((s) => !s.audio_asset_id)
@@ -157,17 +200,39 @@ export default function VoiceWorkspace() {
     [versions],
   )
 
-  const handleSelectShot = async (shot: StoryboardShot) => {
-    setSelectedShot(shot)
+  const selectedShot = useMemo(
+    () => shots.find((shot) => shot.id === selectedShotId) || null,
+    [selectedShotId, shots],
+  )
+
+  const loadShotDetails = useCallback(async (shot: StoryboardShot) => {
+    const requestId = ++detailRequestRef.current
     setVersions([])
     setSubtitleData([])
     setEstimate(null)
-    voiceApi.versions(projectId, shot.id).then((res) => setVersions(res.data)).catch(() => {})
-    voiceApi.estimate(projectId, shot.id, selectedTemplateId || undefined)
-      .then((res) => setEstimate(res.data))
-      .catch(() => {})
-    voiceApi.subtitles(projectId, shot.id).then((res) => setSubtitleData(res.data.subtitle_data)).catch(() => {})
-  }
+    setNormalizedTextEdited(false)
+    const [versionsResult, estimateResult, subtitlesResult] = await Promise.allSettled([
+      voiceApi.versions(projectId, shot.id),
+      voiceApi.estimate(projectId, shot.id, selectedTemplateId || undefined),
+      voiceApi.subtitles(projectId, shot.id),
+    ])
+    if (requestId !== detailRequestRef.current) return
+    if (versionsResult.status === 'fulfilled') setVersions(versionsResult.value.data)
+    if (estimateResult.status === 'fulfilled') setEstimate(estimateResult.value.data)
+    if (subtitlesResult.status === 'fulfilled') setSubtitleData(subtitlesResult.value.data.subtitle_data)
+  }, [projectId, selectedTemplateId])
+
+  useEffect(() => {
+    if (!selectedShot) {
+      setVersions([])
+      setSubtitleData([])
+      setEstimate(null)
+      return
+    }
+    loadShotDetails(selectedShot).catch(() => {})
+  }, [loadShotDetails, selectedShot?.id, selectedShot?.narration, selectedShot?.narration_hash])
+
+  const handleSelectShot = (shot: StoryboardShot) => setSelectedShotId(shot.id)
 
   const handleGenerate = async () => {
     if (!selectedShot) {
@@ -175,6 +240,20 @@ export default function VoiceWorkspace() {
     }
     const values = await form.validateFields().catch(() => null)
     if (!values) return
+    // 生成前再读一次解说词，防止在另一个页面刚保存的新稿被旧页面覆盖。
+    const latestResponse = await storyboardApi.list(projectId).catch(() => null)
+    if (!latestResponse) return
+    const latestShots = latestResponse.data
+    const latestShot = latestShots.find((shot) => shot.id === selectedShot.id)
+    setShots(latestShots)
+    if (!latestShot) {
+      message.warning('该分镜已从解说词系统移除，请重新选择。')
+      return
+    }
+    if ((latestShot.narration || '') !== (selectedShot.narration || '')) {
+      message.warning('解说词刚刚有更新，已同步最新内容，请确认后再生成配音。')
+      return
+    }
     const payload: Record<string, any> = {
       shot_id: selectedShot.id,
       voice_template_id: selectedTemplateId || null,
@@ -183,15 +262,16 @@ export default function VoiceWorkspace() {
       volume: values.volume ?? 1.0,
       pause_strength: values.pause_strength ?? 1.0,
       emotion: values.emotion || undefined,
+      normalized_text_override: normalizedTextEdited ? estimate?.normalized_text || undefined : undefined,
       output_formats: ['wav', 'mp3'],
       idempotency_key: `gen-${Date.now()}`,
     }
     try {
-      const res = await voiceApi.generate(projectId, payload)
+      await voiceApi.generate(projectId, payload)
       setPolling(true)
       setTimeout(() => {
-        handleSelectShot(selectedShot)
-        fetchAll()
+        loadShotDetails(selectedShot).catch(() => {})
+        fetchScripts().catch(() => {})
       }, 2500)
     } catch {
       // 拦截器已提示
@@ -202,7 +282,7 @@ export default function VoiceWorkspace() {
     if (!selectedShot) return
     try {
       await voiceApi.selectVersion(projectId, selectedShot.id, v.id)
-      handleSelectShot(selectedShot)
+      loadShotDetails(selectedShot).catch(() => {})
     } catch {
       // 已提示
     }
@@ -212,7 +292,7 @@ export default function VoiceWorkspace() {
     if (!selectedShot) return
     try {
       await voiceApi.deleteVersion(projectId, selectedShot.id, v.id)
-      handleSelectShot(selectedShot)
+      loadShotDetails(selectedShot).catch(() => {})
     } catch {
       // 已提示
     }
@@ -222,7 +302,7 @@ export default function VoiceWorkspace() {
     if (!selectedShot) return
     try {
       await voiceApi.restoreVersion(projectId, selectedShot.id, v.id)
-      handleSelectShot(selectedShot)
+      loadShotDetails(selectedShot).catch(() => {})
     } catch {
       // 已提示
     }
@@ -236,7 +316,7 @@ export default function VoiceWorkspace() {
       })
       setBatchModalOpen(false)
       setPolling(true)
-      setTimeout(fetchAll, 3000)
+      setTimeout(() => fetchScripts().catch(() => {}), 3000)
     } catch {
       // 已提示
     }
@@ -337,7 +417,15 @@ export default function VoiceWorkspace() {
                     </Space>
                   </List.Item>
                 )}
-                locale={{ emptyText: '暂无分镜' }}
+                locale={{
+                  emptyText: (
+                    <Empty description="当前筛选下没有解说词分镜">
+                      <Button size="small" onClick={() => navigate(`/project/${projectId}/storyboard`)}>
+                        前往解说词系统
+                      </Button>
+                    </Empty>
+                  ),
+                }}
               />
             </Space>
           </div>
@@ -369,7 +457,10 @@ export default function VoiceWorkspace() {
                     value={estimate?.normalized_text || ''}
                     style={{ marginTop: 8 }}
                     placeholder="等待估算结果"
-                    onChange={(e) => setEstimate((prev) => (prev ? { ...prev, normalized_text: e.target.value } : prev))}
+                    onChange={(e) => {
+                      setNormalizedTextEdited(true)
+                      setEstimate((prev) => (prev ? { ...prev, normalized_text: e.target.value } : prev))
+                    }}
                   />
                 </div>
 
@@ -544,10 +635,7 @@ export default function VoiceWorkspace() {
               style={{ width: '100%', marginTop: 8 }}
               placeholder="选择配音模板"
               value={selectedTemplateId || undefined}
-              onChange={(v) => {
-                setSelectedTemplateId(v)
-                if (selectedShot) handleSelectShot(selectedShot)
-              }}
+              onChange={setSelectedTemplateId}
               options={templates.map((t) => ({
                 value: t.id,
                 label: `${t.name}${t.voice_provider === 'mock' || t.voice_provider === 'disabled' ? '（演示）' : ''}`,
@@ -704,7 +792,7 @@ export default function VoiceWorkspace() {
           onSave={async (segs) => {
             try {
               await voiceApi.updateSubtitles(projectId, selectedShot!.id, segs)
-              handleSelectShot(selectedShot!)
+              loadShotDetails(selectedShot!).catch(() => {})
               setSubtitleModalOpen(false)
             } catch {
               // 已提示

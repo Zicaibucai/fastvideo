@@ -86,6 +86,16 @@ def get_llm_adapter(stage: str = "narration") -> BaseAIAdapter:
             timeout=settings.kimi_timeout,
             model=model or settings.kimi_model,
         )
+    if provider == "kimi_code":
+        # Kimi Code 编程版独立通道（/coding/v1），与 Moonshot 平台 Key 分开存放。
+        if not provider_value.get("api_key"):
+            return _mock(MockLLMAdapter, requested_provider=provider)
+        return KimiLLMAdapter(
+            api_key=provider_value.get("api_key"),
+            base_url=provider_value.get("base_url") or settings.kimi_code_base_url,
+            timeout=settings.kimi_timeout,
+            model=model or settings.kimi_code_model,
+        )
     if provider == "volcengine_vision":
         if not provider_value.get("api_key"):
             return _mock(MockLLMAdapter, requested_provider=provider)

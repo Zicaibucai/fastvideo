@@ -289,6 +289,7 @@ VOLCENGINE_VOICES = [
     {"id": "zh_female_cancan_uranus_bigtts", "name": "灿灿 2.0（温暖，适合通用叙事）", "gender": "female", "provider": "volcengine"},
     {"id": "zh_male_m191_uranus_bigtts", "name": "云舟 2.0（清晰男声，适合解说）", "gender": "male", "provider": "volcengine"},
     {"id": "zh_male_taocheng_uranus_bigtts", "name": "小天 2.0（稳重男声）", "gender": "male", "provider": "volcengine"},
+    {"id": "ICL_uranus_zh_male_ruyacaijun_tob", "name": "儒雅才俊 2.0（深沉男声，适合解说）", "gender": "male", "provider": "volcengine"},
     {"id": "zh_female_gaolengyujie_uranus_bigtts", "name": "高冷御姐 2.0（成熟冷静）", "gender": "female", "provider": "volcengine"},
     {"id": "zh_female_xinlingjitang_uranus_bigtts", "name": "心灵鸡汤 2.0（温暖治愈）", "gender": "female", "provider": "volcengine"},
     {"id": "zh_female_wenroushunv_uranus_bigtts", "name": "温柔淑女 2.0", "gender": "female", "provider": "volcengine"},

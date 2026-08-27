@@ -56,6 +56,8 @@ PAUSE_LEAD = 0.4  # 片头停顿
 PAUSE_TAIL = 0.4  # 片尾停顿
 MIN_SEGMENT_DURATION = 1.5
 MAX_SEGMENT_DURATION = 60.0
+# 渲染器行为变化（例如字幕烧录）时，让已有缓存自动失效，避免继续播放旧成片。
+SEGMENT_RENDERER_VERSION = "2026-08-27-subtitle-burn-v1"
 
 FORMAL_FORBIDDEN_AUTH = {"unknown", "pending", "rejected", "expired", "mock_only"}
 
@@ -326,6 +328,7 @@ def sync_storyboard_to_video_project(db: Session, vp: VideoProject, user: User |
     db.commit()
     for seg in db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id).all():
         _auto_select_assets(db, seg)
+    _invalidate_stale_render_cache(db, vp)
     db.commit()
     active_count = db.query(VideoSegment).filter(
         VideoSegment.video_project_id == vp.id,
@@ -448,6 +451,7 @@ def compute_segment_input_hash(db: Session, vp: VideoProject, seg: VideoSegment)
             audio_sha = asset.sha256 if asset else ver.narration_hash
     subs = resolve_subtitles(db, seg)
     return compute_input_hash(
+        renderer_version=SEGMENT_RENDERER_VERSION,
         visual_asset_id=visual_id,
         visual_sha256=visual_sha,
         audio_version_id=seg.audio_version_id,
@@ -465,6 +469,24 @@ def compute_segment_input_hash(db: Session, vp: VideoProject, seg: VideoSegment)
         fps=vp.fps,
         logo=vp.logo_config,
     )
+
+
+def _invalidate_stale_render_cache(db: Session, vp: VideoProject) -> None:
+    """渲染器升级后清掉旧分段缓存，确保字幕等新处理进入预览和导出。"""
+    segs = (
+        db.query(VideoSegment)
+        .filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status == "success")
+        .all()
+    )
+    for seg in segs:
+        current_hash = compute_segment_input_hash(db, vp, seg)
+        if seg.input_hash == current_hash:
+            continue
+        seg.needs_rebuild = True
+        seg.render_status = "pending"
+        seg.output_key = None
+        seg.rendered_at = None
+        seg.render_progress = 0
 
 
 def mark_segments_needs_rebuild(db: Session, project_id: str, shot_id: str, reason: str) -> list[str]:
@@ -545,6 +567,7 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
                     width=w, height=h, fps=fps,
                     audio_bytes=audio_bytes, volume=seg.volume, short_video="loop",
                     time_adaptation=adaptation,
+                    ass_path=ass_path,
                     progress_callback=_video_progress,
                 )
             elif kind == "image":
@@ -559,6 +582,7 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
                     fps=fps,
                     audio_bytes=audio_bytes,
                     volume=seg.volume,
+                    ass_path=ass_path,
                 )
             else:
                 shot = db.get(StoryboardShot, seg.storyboard_shot_id) if seg.storyboard_shot_id else None
@@ -566,7 +590,7 @@ def render_segment(db: Session, segment_id: str) -> dict[str, Any]:
                 data = render_title_card(
                     title, "演示版（占位画面）", duration=duration,
                     width=w, height=h, fps=fps, brand_color=vp.brand_color,
-                    audio_bytes=audio_bytes,
+                    audio_bytes=audio_bytes, ass_path=ass_path,
                 )
         except Exception as exc:
             logger.exception("segment_render_failed", segment_id=segment_id)

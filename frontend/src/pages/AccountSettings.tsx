@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
   App,
-  Alert,
   Avatar,
   Button,
   Card,
@@ -258,8 +257,8 @@ export default function AccountSettings() {
                     if (stage === 'image') return ['seedream', 'minimax', 'openai', 'mock'].includes(provider.provider)
                     if (stage === 'video') return ['seedance', 'mock'].includes(provider.provider)
                     if (stage === 'voice') return ['volcengine', 'minimax', 'openai', 'mock'].includes(provider.provider)
-                    // 解说词、工程信息提取和提示词大师统一使用 Kimi；Mock 仅保留给演示/测试。
-                    return ['kimi', 'mock'].includes(provider.provider)
+                    // 解说词、工程信息提取和提示词大师统一使用 Kimi 系（开放平台或 Kimi Code）；Mock 仅保留给演示/测试。
+                    return ['kimi', 'kimi_code', 'mock'].includes(provider.provider)
                   })
                   return (
                     <div key={stage} style={{ padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
@@ -272,17 +271,9 @@ export default function AccountSettings() {
                       />
                       <Input
                         value={binding.model || ''}
-                        placeholder={stage === 'prompt_master' && binding.provider === 'kimi' ? '例如 kimi-k3；留空使用 Kimi 默认模型' : '使用 Provider 默认模型'}
+                        placeholder={stage === 'prompt_master' && (binding.provider === 'kimi' || binding.provider === 'kimi_code') ? '例如 kimi-k3；留空使用 Kimi 默认模型' : '使用 Provider 默认模型'}
                         onChange={(event) => updateAiStage(stage, { model: event.target.value })}
                       />
-                      {stage === 'prompt_master' && binding.provider === 'kimi' && (
-                        <>
-                          <Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 11 }}>
-                            提示词大师会把首尾帧传给 Kimi。Kimi Code Key（sk-kimi-）使用 https://api.kimi.com/coding/v1；
-                            Moonshot 开放平台 Key 使用 https://api.moonshot.cn/v1 或 https://api.moonshot.ai/v1。
-                          </Text>
-                        </>
-                      )}
                     </div>
                   )
                 })}
@@ -297,7 +288,17 @@ export default function AccountSettings() {
                     <Row gutter={12}>
                       <Col xs={24} md={8}><Text type="secondary">接口地址</Text><Input style={{ marginTop: 5 }} value={provider.base_url} onChange={(event) => updateAiProvider(provider.provider, { base_url: event.target.value })} /></Col>
                       <Col xs={24} md={8}><Text type="secondary">默认模型</Text><Input style={{ marginTop: 5 }} value={provider.model} onChange={(event) => updateAiProvider(provider.provider, { model: event.target.value })} /></Col>
-                      <Col xs={24} md={8}><Text type="secondary">API Key</Text><Input.Password style={{ marginTop: 5 }} placeholder={provider.api_key_hint} value={provider.api_key || ''} onChange={(event) => updateAiProvider(provider.provider, { api_key: event.target.value })} /></Col>
+                      <Col xs={24} md={8}>
+                        <Text type="secondary">API Key</Text>
+                        <Input.Password
+                          name={`ai-provider-${provider.provider}-api-key`}
+                          autoComplete="new-password"
+                          style={{ marginTop: 5 }}
+                          placeholder={provider.api_key_hint}
+                          value={provider.api_key || ''}
+                          onChange={(event) => updateAiProvider(provider.provider, { api_key: event.target.value })}
+                        />
+                      </Col>
                     </Row>
                     <Space style={{ marginTop: 12 }}>
                       <Button type="primary" size="small" icon={<CheckCircleOutlined />} loading={aiSaving} onClick={() => saveAiSettings(provider.label)}>
@@ -305,15 +306,6 @@ export default function AccountSettings() {
                       </Button>
                       <Text type="secondary" style={{ fontSize: 12 }}>输入 API Key 后点击此按钮立即生效</Text>
                     </Space>
-                    {provider.provider === 'kimi' && (
-                      <Alert
-                        type="info"
-                        showIcon
-                        style={{ marginTop: 12 }}
-                        message="提示词大师支持 Kimi Code K3 多模态"
-                        description="Kimi Code Key（sk-kimi-）请使用 https://api.kimi.com/coding/v1，模型填 k3 或 kimi-k3；系统会自动规范化。Moonshot 平台 Key 则使用对应的 moonshot.cn/ai 接口。"
-                      />
-                    )}
                     </>
                   ),
                 }))}

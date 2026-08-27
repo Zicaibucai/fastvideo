@@ -98,7 +98,9 @@ def _has_filter(name: str) -> bool:
             [settings.ffmpeg_binary, "-hide_banner", "-filters"],
             capture_output=True, text=True, timeout=20,
         )
-        return proc.returncode == 0 and any(line.split()[-1:] == [name] for line in proc.stdout.splitlines())
+        # `ffmpeg -filters` 的最后一列是说明文字，不能用最后一个 token 判断滤镜。
+        # 过滤器名称位于中间列（例如 `ass V->V ...`、`drawtext V->V ...）。
+        return proc.returncode == 0 and any(name in line.split() for line in proc.stdout.splitlines())
     except (OSError, subprocess.TimeoutExpired):
         return False
 
@@ -260,6 +262,11 @@ def _motion_expr(motion: str, frames: int) -> tuple[str, str, str]:
     return z, x, y
 
 
+def _ass_filter_path(ass_path: str) -> str:
+    """转义 ASS 文件路径，供 FFmpeg ass 滤镜使用。"""
+    return str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
+
+
 # ============================================================
 # 图片 → 分段
 # ============================================================
@@ -328,7 +335,7 @@ def render_image_segment(
 
         if ass_path and _has_filter("ass"):
             # ass 滤镜路径不使用 shell 引号；单引号在部分 FFmpeg 构建中会被当作路径字符。
-            safe_ass = str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
+            safe_ass = _ass_filter_path(ass_path)
             vf += f";[v]ass={safe_ass}[v]"
 
         if audio_path:
@@ -370,6 +377,7 @@ def _render_rife_segment(
     fps: int,
     audio_bytes: bytes | None,
     volume: float,
+    ass_path: str | None = None,
     progress_callback: Callable[[int, str], None] | None = None,
 ) -> bytes:
     """使用 rife-metal 逐帧补中间帧，再由 FFmpeg 封装音视频。
@@ -444,13 +452,18 @@ def _render_rife_segment(
         if progress_callback:
             progress_callback(76, "RIFE 补帧完成，正在封装视频…")
         out = tmp / "rife_segment.mp4"
+        video_filter = "[0:v]"
+        if ass_path and _has_filter("ass"):
+            video_filter += f"ass={_ass_filter_path(ass_path)}[v]"
+        else:
+            video_filter += "null[v]"
         cmd = [
             settings.ffmpeg_binary, "-y",
             "-framerate", f"{sequence_fps:.6f}",
             "-i", str(output_frames / "frame_%08d.png"),
             "-i", str(audio),
-            "-filter_complex", f"[1:a]{_audio_filter(duration, volume)}[a]",
-            "-map", "0:v", "-map", "[a]", "-t", str(duration),
+            "-filter_complex", f"{video_filter};[1:a]{_audio_filter(duration, volume)}[a]",
+            "-map", "[v]", "-map", "[a]", "-t", str(duration),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-pix_fmt", "yuv420p", "-r", str(fps),
             "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2",
@@ -473,6 +486,7 @@ def render_video_segment(
     fps: int = 25,
     audio_bytes: bytes | None = None,
     volume: float = 1.0,
+    ass_path: str | None = None,
     short_video: str = "loop",  # loop | freeze | trim
     time_adaptation: str = "natural",  # natural | safe_stretch | rife | interpolate | loop | freeze | stretch
     progress_callback: Callable[[int, str], None] | None = None,
@@ -495,6 +509,7 @@ def render_video_segment(
                 fps=fps,
                 audio_bytes=audio_bytes,
                 volume=volume,
+                ass_path=ass_path,
                 progress_callback=progress_callback,
             )
         except _RifeUnavailable as exc:
@@ -547,6 +562,8 @@ def render_video_segment(
             time_scale = duration / src_duration
             vf += f",setpts={time_scale:.6f}*PTS,minterpolate=mi_mode=mci:mc_mode=aobmc:me_mode=bidir"
         vf += f",fps={fps},format=yuv420p[v]"
+        if ass_path and _has_filter("ass"):
+            vf += f";[v]ass={_ass_filter_path(ass_path)}[v]"
 
         audio_path: Path | None = None
         if audio_bytes:
@@ -591,6 +608,7 @@ def render_title_card(
     fps: int = 25,
     brand_color: str = "#1E3A5F",
     audio_bytes: bytes | None = None,
+    ass_path: str | None = None,
 ) -> bytes:
     """生成标题卡视频（品牌色背景 + 居中文字 + 静音/音频轨）。"""
     duration = max(duration, 1.0)
@@ -622,6 +640,8 @@ def render_title_card(
             draw = "format=yuv420p"
         # 淡入淡出
         vf = f"[0:v]{draw},fade=t=in:d=0.4,fade=t=out:st={max(0, duration - 0.5)}:d=0.5,fps={fps},format=yuv420p[v]"
+        if ass_path and _has_filter("ass"):
+            vf += f";[v]ass={_ass_filter_path(ass_path)}[v]"
 
         if audio_bytes:
             audio_path = tmp / "audio.wav"

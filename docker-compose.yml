@@ -74,7 +74,8 @@ services:
       minio:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://fastvideo:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/fastvideo
+      # 交付测试可通过 .env 切换到独立 SQLite 快照；默认仍使用 Postgres。
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://fastvideo:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/fastvideo}
       REDIS_URL: redis://redis:6379/0
       USE_CELERY: "true"
       STORAGE_BACKEND: minio
@@ -131,6 +132,7 @@ services:
       - "8000:8000"
     volumes:
       - storage_data:/app/data
+      - ${DELIVERY_SQLITE_DB:-./backend/app.db}:/app/app.db
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
@@ -153,7 +155,7 @@ services:
       minio:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://fastvideo:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/fastvideo
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://fastvideo:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/fastvideo}
       REDIS_URL: redis://redis:6379/0
       USE_CELERY: "true"
       STORAGE_BACKEND: minio
@@ -206,6 +208,7 @@ services:
       ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
     volumes:
       - storage_data:/app/data
+      - ${DELIVERY_SQLITE_DB:-./backend/app.db}:/app/app.db
     command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
 
   # ---------- 前端 ----------

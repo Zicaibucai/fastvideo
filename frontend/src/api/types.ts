@@ -316,6 +316,9 @@ export interface StoryboardShot {
   audio_duration_status?: string
   audio_quality_status?: string
   audio_is_stale?: boolean
+  narration_hash?: string
+  narration_prev_hash?: string
+  narration_updated_at?: string
   tts_voice_id?: string
   video_clip_key?: string
   status: string
@@ -323,6 +326,7 @@ export interface StoryboardShot {
   revision?: number
   versions?: ShotVersion[]
   created_at: string
+  updated_at: string
 }
 
 export interface ShotVersion {

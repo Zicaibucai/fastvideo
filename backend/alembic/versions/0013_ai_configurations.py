@@ -16,8 +16,8 @@ def upgrade() -> None:
         op.create_table(
             "ai_configurations",
             sa.Column("id", sa.String(36), primary_key=True),
-            sa.Column("created_at", sa.DateTime(), nullable=False),
-            sa.Column("updated_at", sa.DateTime(), nullable=False),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
             sa.Column("scope", sa.String(32), nullable=False, unique=True, server_default="global"),
             sa.Column("providers", sa.JSON(), nullable=True),
             sa.Column("stages", sa.JSON(), nullable=True),

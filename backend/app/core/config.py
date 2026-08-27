@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     kimi_model: str = "kimi-k3"
     kimi_timeout: int = 180
 
+    # Kimi Code（sk-kimi- 编程版 Key，独立存放，走 /coding/v1 通道）
+    kimi_code_api_key: str = ""
+    kimi_code_base_url: str = "https://api.kimi.com/coding/v1"
+    kimi_code_model: str = "kimi-k3"
+
     # MiniMax（图片生成、参考图渲染、图生视频）
     # 国内账号默认使用 api.minimaxi.com；海外账号可在 .env 改为 api.minimax.io。
     minimax_api_key: str = ""
@@ -200,6 +205,7 @@ class Settings(BaseSettings):
             self.openai_api_key
             or self.deepseek_api_key
             or self.kimi_api_key
+            or self.kimi_code_api_key
             or self.minimax_api_key
             or self.ark_api_key
             or self.seedance_api_key

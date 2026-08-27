@@ -28,13 +28,16 @@ STAGES = {
     "voice": "配音生成",
 }
 
-# 这三个环节都需要文本结构化能力；提示词大师还需要图片理解能力，统一走 Kimi。
+# 这三个环节都需要文本结构化能力；提示词大师还需要图片理解能力，统一走 Kimi 系。
 KIMI_TEXT_STAGES = {"narration", "fact_extraction", "prompt_master"}
+# Kimi 系允许的两个通道：Moonshot 开放平台（kimi）与 Kimi Code 编程版（kimi_code）。
+KIMI_STAGE_PROVIDERS = {"kimi", "kimi_code"}
 
 PROVIDER_META = {
     "openai": {"label": "OpenAI", "kind": "llm", "base_url": "https://api.openai.com/v1"},
     "deepseek": {"label": "DeepSeek", "kind": "llm", "base_url": "https://api.deepseek.com"},
     "kimi": {"label": "Kimi（文本+多模态）", "kind": "multimodal_llm", "base_url": "https://api.moonshot.ai/v1"},
+    "kimi_code": {"label": "Kimi Code（K3 编程版）", "kind": "multimodal_llm", "base_url": "https://api.kimi.com/coding/v1"},
     "volcengine_vision": {"label": "火山方舟视觉模型（Doubao-Seed）", "kind": "vision_llm", "base_url": "https://ark.cn-beijing.volces.com/api/v3"},
     "seedream": {"label": "Seedream", "kind": "image", "base_url": "https://ark.cn-beijing.volces.com/api/v3"},
     "seedance": {"label": "Seedance", "kind": "video", "base_url": "https://ark.cn-beijing.volces.com/api/v3"},
@@ -105,6 +108,7 @@ def _default_provider_config() -> dict[str, dict[str, Any]]:
         "openai": {"api_key": settings.openai_api_key, "base_url": settings.ai_llm_base_url or settings.openai_base_url, "model": settings.ai_llm_model},
         "deepseek": {"api_key": settings.deepseek_api_key, "base_url": settings.deepseek_base_url, "model": "deepseek-v4-flash"},
         "kimi": {"api_key": settings.kimi_api_key, "base_url": settings.kimi_base_url, "model": settings.kimi_model},
+        "kimi_code": {"api_key": settings.kimi_code_api_key, "base_url": settings.kimi_code_base_url, "model": settings.kimi_code_model},
         "volcengine_vision": {
             "api_key": settings.volcengine_vision_api_key or settings.ark_api_key or settings.seedance_api_key,
             "base_url": settings.volcengine_vision_base_url or settings.seedance_base_url,
@@ -173,11 +177,16 @@ def load_runtime_config(db: Session) -> None:
     if row and row.is_enabled:
         stages = deepcopy(row.stages or {})
         changed = False
-        # 将历史保存的 DeepSeek / 火山视觉绑定迁移到 Kimi，避免升级后仍沿用旧通道。
+        # 将历史保存的 DeepSeek / 火山视觉绑定迁移到 Kimi 系，避免升级后仍沿用旧通道。
         for stage in KIMI_TEXT_STAGES:
             current = dict(stages.get(stage) or {})
-            if current.get("provider") != "kimi" or not current.get("model"):
+            provider = current.get("provider")
+            if provider not in KIMI_STAGE_PROVIDERS:
                 stages[stage] = {**current, "provider": "kimi", "model": settings.kimi_model}
+                changed = True
+            elif not current.get("model"):
+                default_model = settings.kimi_code_model if provider == "kimi_code" else settings.kimi_model
+                stages[stage] = {**current, "model": default_model}
                 changed = True
         if changed:
             row.stages = stages
@@ -273,15 +282,27 @@ def save_configuration(db: Session, payload: dict[str, Any], username: str) -> d
                     merged["base_url"] = "https://api.kimi.com/coding/v1"
                 elif not configured_base.endswith("/v1"):
                     merged["base_url"] = f"{configured_base}/v1"
+        if key == "kimi_code":
+            # kimi_code 是 Kimi Code 编程版的独立存放位置，通道固定为 /coding/v1，
+            # 防止误填成 Moonshot 平台地址后跨域调用失败。
+            configured_base = str(merged.get("base_url") or "").strip().rstrip("/")
+            if "api.kimi.com/coding" not in configured_base:
+                merged["base_url"] = settings.kimi_code_base_url
+            elif not configured_base.endswith("/v1"):
+                merged["base_url"] = f"{configured_base}/v1"
     stages = deepcopy(payload.get("stages") or {})
-    # 文本结构化与多模态环节统一使用 Kimi，避免设置页或旧客户端再次切回旧通道。
+    # 文本结构化与多模态环节统一使用 Kimi 系，避免设置页或旧客户端再次切回旧通道。
     for stage in KIMI_TEXT_STAGES:
         if stage in stages:
             current = dict(stages.get(stage) or {})
+            provider = current.get("provider")
+            if provider not in KIMI_STAGE_PROVIDERS:
+                provider = "kimi"
+            default_model = settings.kimi_code_model if provider == "kimi_code" else settings.kimi_model
             stages[stage] = {
                 **current,
-                "provider": "kimi",
-                "model": current.get("model") or settings.kimi_model,
+                "provider": provider,
+                "model": current.get("model") or default_model,
             }
     persisted_providers = _encrypted_providers(providers)
     if row is None:
