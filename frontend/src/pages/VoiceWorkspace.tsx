@@ -36,6 +36,7 @@ import {
   MoreOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
+import { CollabEntry } from '../components/collab/CollabEntry'
 import {
   storyboardApi,
   voiceApi,
@@ -339,6 +340,9 @@ export default function VoiceWorkspace() {
           <Text type="secondary" className="page-description">
             解说词 → 朗读规范化 → AI 配音 → 版本管理 → 字幕生成
           </Text>
+          <div style={{ marginTop: 8 }}>
+            {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
+          </div>
         </div>
       </div>
 

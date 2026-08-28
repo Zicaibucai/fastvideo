@@ -31,6 +31,15 @@ from app.models.video_generation import (
 )
 from app.models.export_task import ExportTask
 from app.models.ai_configuration import AIConfiguration
+from app.models.collaboration import (
+    Notification,
+    ProjectComment,
+    ProjectInvitation,
+    ProjectMember,
+    ProjectWorkItem,
+    ReviewDecision,
+    ReviewRequest,
+)
 
 __all__ = [
     "Base",
@@ -69,4 +78,11 @@ __all__ = [
     "VideoTemplateDraft",
     "ExportTask",
     "AIConfiguration",
+    "ProjectMember",
+    "ProjectInvitation",
+    "ProjectComment",
+    "ProjectWorkItem",
+    "ReviewRequest",
+    "ReviewDecision",
+    "Notification",
 ]

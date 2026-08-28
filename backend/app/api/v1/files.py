@@ -20,6 +20,7 @@ from app.core.storage import StorageError, storage
 from app.models.project import Project
 from app.models.asset import Asset
 from app.models.user import User
+from app.services.permissions import get_project_access, PERM_PROJECT_VIEW
 
 router = APIRouter(prefix="/files", tags=["文件"])
 
@@ -40,16 +41,20 @@ def get_file(
         raise HTTPException(404, "文件不存在")
     parts = normalized_key.split("/")
     if len(parts) >= 2 and parts[0] == "projects":
-        project = db.get(Project, parts[1])
-        if project is None or project.owner_id != user.id:
-            raise HTTPException(404, "文件不存在")
+        try:
+            get_project_access(db, parts[1], user, PERM_PROJECT_VIEW)
+        except Exception:
+            raise HTTPException(404, "文件不存在") from None
     elif normalized_key.startswith("voice/"):
         # Voice previews historically used a global key prefix; resolve the
         # owning Asset before serving so another tenant cannot guess the key.
         asset = db.query(Asset).filter(Asset.file_key == normalized_key).first()
-        project = db.get(Project, asset.project_id) if asset and asset.project_id else None
-        if not asset or (project and project.owner_id != user.id) or (asset.project_id and not project):
+        if not asset or not asset.project_id:
             raise HTTPException(404, "文件不存在")
+        try:
+            get_project_access(db, asset.project_id, user, PERM_PROJECT_VIEW)
+        except Exception:
+            raise HTTPException(404, "文件不存在") from None
     else:
         # New storage namespaces must opt in with an explicit ownership rule;
         # authentication alone is never enough to expose a future prefix.

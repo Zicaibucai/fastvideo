@@ -49,6 +49,14 @@ from app.services.video_composer import (
     render_title_card,
     render_video_segment,
 )
+from app.services.video_project_media import (
+    build_close_card as _build_close_card,
+    build_open_card as _build_open_card,
+    extract_audio as _extract_audio,
+    load_segment_item as _load_segment_item,
+    write_bytes as _write_bytes,
+)
+from app.services.video_project_timeline import project_srt as _project_srt_impl, timeline_snapshot as _timeline_snapshot
 
 logger = get_logger(__name__)
 
@@ -760,10 +768,18 @@ def preflight(db: Session, vp: VideoProject, mode: str = "demo") -> dict[str, An
         if ratio > 0.2:
             issues.append({"level": "warning", "code": "duration_mismatch", "message": f"分段总时长 {total:.1f}s 与目标 {vp.duration_seconds}s 偏差较大。"})
 
+    # 协作审核门禁（review_policy：disabled / recommended / required）
+    from app.models.project import Project
+    from app.services.review_service import review_gate_issues
+
+    issues.extend(review_gate_issues(db, vp, mode))
+    project = db.get(Project, vp.project_id) if vp.project_id else None
+
     errors = [i for i in issues if i["level"] == "error"]
     return {
         "ok": not errors,
         "mode": mode,
+        "review_policy": (project.review_policy if project else "recommended"),
         "issues": issues,
         "segment_count": len(segs),
         "rendered_segment_count": rendered,
@@ -832,13 +848,13 @@ def compose_project(db: Session, export_task_id: str) -> dict[str, Any]:
 
         tmp = Path(td)
         # 片头
-        open_item = _build_open_card(db, vp, w, h, fps, tmp)
+        open_item = _build_open_card(vp, w, h, fps, tmp)
         items: list[dict] = []
         if open_item:
             items.append(open_item)
         for seg in segs:
-            items.append(_load_segment_item(db, seg, tmp))
-        close_item = _build_close_card(db, vp, w, h, fps, tmp)
+            items.append(_load_segment_item(seg, tmp))
+        close_item = _build_close_card(vp, w, h, fps, tmp)
         if close_item:
             items.append(close_item)
 
@@ -969,118 +985,15 @@ def compose_project(db: Session, export_task_id: str) -> dict[str, Any]:
         }
 
 
-def _load_segment_item(db: Session, seg: VideoSegment, tmp: Path) -> dict:
-    data = storage.load(seg.output_key)
-    video_path = tmp / f"seg_{seg.id}.mp4"
-    _write_bytes(video_path, data)
-    audio_path = tmp / f"seg_{seg.id}.m4a"
-    _extract_audio(video_path, audio_path)
-    return {
-        "path": str(video_path),
-        "audio_path": str(audio_path),
-        "duration": seg.duration,
-        "transition_type": seg.transition_type,
-        "transition_duration": seg.transition_duration,
-        "shot_id": seg.storyboard_shot_id,
-    }
-
-
-def _extract_audio(video_path: Path, audio_path: Path) -> None:
-    import subprocess
-
-    subprocess.run(
-        [settings.ffmpeg_binary, "-y", "-i", str(video_path), "-vn", "-c:a", "aac",
-         "-ar", "48000", "-ac", "2", str(audio_path)],
-        capture_output=True, timeout=120, check=False,
-    )
-
-
-def _build_open_card(db: Session, vp: VideoProject, w: int, h: int, fps: int, tmp: Path) -> dict | None:
-    cfg = vp.open_config or {}
-    text = cfg.get("text") or vp.name or "工程投标视频"
-    sub_text = cfg.get("sub_text") or ""
-    if not text and not sub_text:
-        return None
-    duration = max(1.0, float(cfg.get("duration", 3.0)))
-    data = render_title_card(text, sub_text, duration=duration, width=w, height=h, fps=fps,
-                             brand_color=cfg.get("brand_color") or vp.brand_color)
-    video_path = tmp / "open.mp4"
-    _write_bytes(video_path, data)
-    audio_path = tmp / "open.m4a"
-    _extract_audio(video_path, audio_path)
-    return {"path": str(video_path), "audio_path": str(audio_path), "duration": duration,
-            "transition_type": "fade", "transition_duration": 0.5, "shot_id": None}
-
-
-def _build_close_card(db: Session, vp: VideoProject, w: int, h: int, fps: int, tmp: Path) -> dict | None:
-    cfg = vp.close_config or {}
-    text = cfg.get("text") or ""
-    if not text:
-        return None
-    duration = max(1.0, float(cfg.get("duration", 3.0)))
-    data = render_title_card(text, "投标人：企业承诺", duration=duration, width=w, height=h, fps=fps,
-                             brand_color=vp.brand_color)
-    video_path = tmp / "close.mp4"
-    _write_bytes(video_path, data)
-    audio_path = tmp / "close.m4a"
-    _extract_audio(video_path, audio_path)
-    return {"path": str(video_path), "audio_path": str(audio_path), "duration": duration,
-            "transition_type": "fade", "transition_duration": 0.5, "shot_id": None}
-
-
-def _write_bytes(path: Path, data: bytes) -> None:
-    path.write_bytes(data)
-
-
 # ============================================================
 # 项目级 SRT（含转场时间轴）
 # ============================================================
 
 def _project_srt(db: Session, vp: VideoProject, items: list[dict], segs: list[VideoSegment]) -> str:
-    """项目级字幕：按分段顺序累计，转场造成的时间重叠计入累计时间。"""
-    all_subs: list[dict] = []
-    offset = 0.0
-    seg_by_shot = {s.storyboard_shot_id: s for s in segs}
-    n = len(items)
-    for idx, item in enumerate(items):
-        shot_id = item.get("shot_id")
-        seg = seg_by_shot.get(shot_id) if shot_id else None
-        subs = []
-        if seg:
-            subs = resolve_subtitles(db, seg)
-        if subs:
-            for sub in subs:
-                entry = dict(sub)
-                entry["start_ms"] = int(round((offset + float(sub.get("start_ms", 0)) / 1000) * 1000))
-                entry["end_ms"] = int(round((offset + float(sub.get("end_ms", 0)) / 1000) * 1000))
-                all_subs.append(entry)
-        # 移动到下一项：累计时长 - 本项之后的转场（最后一项无后续转场）
-        this_trans = float(item.get("transition_duration", 0.0) or 0.0)
-        offset += float(item["duration"]) - (this_trans if idx < n - 1 else 0.0)
-    return render_srt(all_subs)
+    return _project_srt_impl(db, vp, items, segs, resolve_subtitles)
 
 
-def _timeline_snapshot(vp: VideoProject, items: list[dict], segs: list[VideoSegment]) -> dict:
-    return {
-        "width": vp.width,
-        "height": vp.height,
-        "fps": vp.fps,
-        "items": [
-            {
-                "shot_id": it.get("shot_id"),
-                "duration": it["duration"],
-                "transition_type": it["transition_type"],
-                "transition_duration": it["transition_duration"],
-            }
-            for it in items
-        ],
-        "music_tracks": vp.music_tracks,
-        "logo_config": vp.logo_config,
-        "open_config": vp.open_config,
-        "close_config": vp.close_config,
-        "subtitle_style": vp.subtitle_style,
-        "brand_color": vp.brand_color,
-    }
+_timeline_snapshot = _timeline_snapshot
 
 
 def build_export_report(db: Session, vp: VideoProject, mode: str, preflight_result: dict, items: list[dict], total: float) -> dict:
@@ -1103,11 +1016,19 @@ def build_export_report(db: Session, vp: VideoProject, mode: str, preflight_resu
             "subtitle_enabled": seg.subtitle_enabled,
             "volume": seg.volume,
         })
+    # 协作审核摘要：演示导出醒目标记“未完成正式审核”
+    review_summary = {"policy": preflight_result.get("review_policy", "recommended"), "formal_review_completed": True}
+    review_issues = [i for i in (preflight_result.get("issues") or []) if i.get("code", "").startswith("review_")]
+    if review_issues:
+        review_summary["formal_review_completed"] = False
+        review_summary["notice"] = "未完成正式审核"
+        review_summary["issues"] = review_issues
     return {
         "video_project_id": vp.id,
         "name": vp.name,
         "mode": mode,
         "generated_at": utc_now_iso(),
+        "review": review_summary,
         "total_duration_seconds": round(total, 3),
         "segment_count": len(segs),
         "width": vp.width,

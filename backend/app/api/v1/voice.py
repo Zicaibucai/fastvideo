@@ -18,6 +18,13 @@ from sqlalchemy.orm import Session
 from app.adapters.factory import get_tts_adapter, tts_provider_info
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.services.permissions import (
+    get_project_access,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.storage import storage
 from app.models.asset import Asset
@@ -82,11 +89,9 @@ _ALL_TTS_CAP_KEYS = [
 ]
 
 
-def _get_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_project(db: Session, project_id: str, user: User, permission: str = PERM_VOICE_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _get_shot(db: Session, project_id: str, shot_id: str) -> StoryboardShot:
@@ -190,7 +195,7 @@ def voice_providers(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     return tts_provider_info()
 
 
@@ -201,7 +206,7 @@ def voice_provider_capabilities(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     adapter = get_tts_adapter()
     if provider in ("mock", "disabled", adapter.provider):
         return adapter.capabilities()
@@ -215,7 +220,7 @@ def voice_provider_voices(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     adapter = get_tts_adapter()
     if provider in ("mock", "disabled", adapter.provider):
         return adapter.list_voices()
@@ -232,7 +237,7 @@ def list_pronunciations(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     return list_rules(db, project_id)
 
 
@@ -243,7 +248,7 @@ def create_pronunciation(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     if payload.is_regex:
         validate_regex(payload.source_text)
     conflicts = detect_conflicts(db, project_id, payload.source_text)
@@ -280,7 +285,7 @@ def patch_pronunciation(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     try:
         return update_rule(db, rule_id, payload.model_dump(exclude_unset=True), is_superuser=current.is_superuser)
     except ConflictError as exc:
@@ -294,7 +299,7 @@ def remove_pronunciation(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     try:
         delete_rule(db, rule_id, is_superuser=current.is_superuser)
     except ConflictError as exc:
@@ -308,7 +313,7 @@ def test_pronunciation(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     return test_read(db, project_id, payload.text)
 
 
@@ -319,7 +324,7 @@ def import_pronunciations(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     result = import_rules_json(
         db,
         project_id,
@@ -338,7 +343,7 @@ def export_pronunciations(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     return export_rules_json(db, project_id)
 
 
@@ -353,7 +358,7 @@ def voice_estimate(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     _get_shot(db, project_id, payload.shot_id)
     try:
         return estimate_for_shot(db, project_id, payload.shot_id, payload.voice_template_id)
@@ -368,7 +373,7 @@ def voice_generate(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     shot = _get_shot(db, project_id, payload.shot_id)
     if not (shot.narration or "").strip():
         raise ConflictError("分镜解说词为空，无法生成配音。")
@@ -432,7 +437,7 @@ def voice_batch(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
 
     # 幂等键
     if payload.idempotency_key:
@@ -526,7 +531,7 @@ def voice_jobs(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     query = db.query(RenderTask).filter(
         RenderTask.project_id == project_id,
         RenderTask.task_type.in_(["gen_voice_version", "tts_batch"]),
@@ -546,7 +551,7 @@ def voice_job_detail(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     task = db.get(RenderTask, job_id)
     if not task or task.project_id != project_id:
         raise NotFoundError("任务不存在")
@@ -572,7 +577,7 @@ def voice_job_retry(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     task = db.get(RenderTask, job_id)
     if not task or task.project_id != project_id:
         raise NotFoundError("任务不存在")
@@ -595,7 +600,7 @@ def voice_job_cancel(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     task = db.get(RenderTask, job_id)
     if not task or task.project_id != project_id:
         raise NotFoundError("任务不存在")
@@ -624,7 +629,7 @@ def shot_voice_versions(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     _get_shot(db, project_id, shot_id)
     versions = list_versions_for_shot(db, project_id, shot_id)
     return [_version_out(db, v) for v in versions]
@@ -638,7 +643,7 @@ def shot_voice_version_detail(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     v = db.get(AudioVersion, version_id)
     if not v or v.project_id != project_id or v.storyboard_shot_id != shot_id or v.is_deleted:
         raise NotFoundError("配音版本不存在")
@@ -653,7 +658,7 @@ def shot_voice_select(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     try:
         result = select_voice_version(db, project_id, shot_id, version_id, current.username)
     except VoiceError as exc:
@@ -671,7 +676,7 @@ def shot_voice_restore(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     try:
         result = restore_voice_version(db, project_id, shot_id, payload.version_id, current.username)
     except VoiceError as exc:
@@ -689,7 +694,7 @@ def shot_voice_delete(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     try:
         soft_delete_voice_version(db, project_id, shot_id, version_id, current.username)
     except VoiceError as exc:
@@ -731,7 +736,7 @@ def shot_subtitles(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     _get_shot(db, project_id, shot_id)
     v = _target_version(db, project_id, shot_id, version_id)
     return {
@@ -752,7 +757,7 @@ def patch_shot_subtitles(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     _get_shot(db, project_id, shot_id)
     v = _target_version(db, project_id, shot_id, None)
     segments = v.subtitle_data or []
@@ -801,7 +806,7 @@ def shot_subtitles_export(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Response:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     v = _target_version(db, project_id, shot_id, version_id)
     from app.services.audio_utils import render_srt
 
@@ -825,7 +830,7 @@ def export_project_srt_endpoint(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Response:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     content = export_project_srt(db, project_id)
     return Response(
         content=content,
@@ -840,7 +845,7 @@ def export_voice_wav(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Response:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     data, filename = export_voice_audio_zip(db, project_id, fmt="wav")
     return Response(
         content=data,
@@ -855,7 +860,7 @@ def export_voice_mp3(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Response:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     data, filename = export_voice_audio_zip(db, project_id, fmt="mp3")
     return Response(
         content=data,
@@ -870,5 +875,5 @@ def voice_summary(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     return project_voice_summary(db, project_id)

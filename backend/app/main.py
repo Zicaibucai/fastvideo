@@ -205,6 +205,7 @@ from app.api.v1 import (  # noqa: E402
     admin,
     assets,
     auth,
+    collaboration,
     documents,
     facts,
     files,
@@ -228,6 +229,7 @@ app.include_router(health.router, prefix=api_prefix)
 app.include_router(auth.router, prefix=api_prefix)
 app.include_router(admin.router, prefix=api_prefix)
 app.include_router(projects.router, prefix=api_prefix)
+app.include_router(collaboration.router, prefix=api_prefix)
 app.include_router(documents.router, prefix=api_prefix)
 app.include_router(reader.router, prefix=api_prefix)
 app.include_router(facts.router, prefix=api_prefix)

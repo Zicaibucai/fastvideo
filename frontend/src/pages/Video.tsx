@@ -40,6 +40,7 @@ import {
 import { useParams } from 'react-router-dom'
 import { assetApi, videoApi, exportApi, downloadVideoFile, downloadVideoSegment, voiceApi } from '../api'
 import { withAuthToken } from '../api/client'
+import { CollabEntry } from '../components/collab/CollabEntry'
 import type { Asset, AudioVersion, VideoProject, VideoSegment, PreflightResult, ExportTask } from '../api/types'
 import { useProjectNotifications } from '../components/ProjectNotificationCenter'
 
@@ -335,7 +336,10 @@ export default function Video() {
   const handleSegmentPatch = async (seg: VideoSegment, payload: Record<string, any>) => {
     if (!vpId) return
     try {
-      const res = await videoApi.updateSegment(vpId, seg.id, payload)
+      const res = await videoApi.updateSegment(vpId, seg.id, {
+        ...payload,
+        base_revision: payload.base_revision ?? seg.revision,
+      })
       setSegments((prev) => prev.map((s) => (s.id === seg.id ? res.data : s)))
       setSelectedSeg(res.data)
       if ('visual_asset_id' in payload) {
@@ -484,6 +488,9 @@ export default function Video() {
       <div className="video-editor-toolbar">
         <div className="video-editor-heading">
           <Title level={3} style={{ margin: 0 }}>视频工作区</Title>
+          {projectId && vpId && (
+            <CollabEntry projectId={projectId} targetType="video_project" targetId={vpId} label="协作与审核" />
+          )}
           <Text type="secondary">
             {vp ? `${vp.name} · ${segments.length} 个分段 · ${totalDuration.toFixed(1)}s` : '选择或新建视频工程'}
           </Text>

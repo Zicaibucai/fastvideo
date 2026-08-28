@@ -32,6 +32,7 @@ import {
   MoreOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
+import { CollabEntry } from '../components/collab/CollabEntry'
 import { renderApi, renderPresetApi } from '../api'
 import { withAuthToken } from '../api/client'
 import type { RenderPreset, RenderJobTask, RenderVersion, SourceImage } from '../api/types'
@@ -252,6 +253,9 @@ export default function RenderWorkspace() {
           <Text type="secondary" className="page-description">
           原始模型/BIM → AI 渲染 → 素材版本管理
           </Text>
+          <div style={{ marginTop: 8 }}>
+            {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
+          </div>
         </div>
       </div>
 

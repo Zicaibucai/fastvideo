@@ -87,6 +87,8 @@ class ExtractedFactOut(TimestampedModel):
     confirmed_by: str | None
     confirmed_at: str | None
     candidates: list | None
+    revision: int = 1
+
 
 
 class FactConfirmRequest(BaseModel):
@@ -94,6 +96,7 @@ class FactConfirmRequest(BaseModel):
     fact_value: str | None = None  # 人工修改后的值
     unit: str | None = None
     note: str | None = None
+    base_revision: int | None = Field(default=None, description="乐观锁版本，不一致返回 409")
 
 
 class FactConfirmResult(BaseModel):

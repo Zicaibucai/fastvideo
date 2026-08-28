@@ -3,6 +3,7 @@ import { Layout, Menu, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   HomeOutlined,
+  TeamOutlined,
   FolderOpenOutlined,
   VideoCameraOutlined,
   FileTextOutlined,
@@ -23,6 +24,8 @@ import { projectApi } from '../api'
 import type { Project } from '../api/types'
 import { rememberProjectOpened } from '../recentProjects'
 import ProjectNotificationCenter, { ProjectNotificationProvider } from './ProjectNotificationCenter'
+import NotificationBell from './NotificationBell'
+import { ProjectAccessProvider } from '../hooks/useProjectPermissions'
 
 const { Sider, Content } = Layout
 
@@ -38,6 +41,7 @@ function projectWorkspaceItems(projectId: string): NonNullable<MenuProps['items'
     { key: `/project/${projectId}/voice`, icon: <AudioOutlined />, label: '配音制作' },
     { key: `/project/${projectId}/assets`, icon: <SoundOutlined />, label: '素材库' },
     { key: `/project/${projectId}/video`, icon: <ExportOutlined />, label: '视频工程与导出' },
+    { key: `/project/${projectId}/collaboration`, icon: <TeamOutlined />, label: '协作与审核' },
   ]
 }
 
@@ -194,8 +198,17 @@ export default function AppLayout() {
               key={urlProjectId || 'global'}
               projectId={urlProjectId}
             >
-              <Outlet />
-              {urlProjectId && <ProjectNotificationCenter projectId={urlProjectId} />}
+              <div style={{ position: 'fixed', top: 12, right: 20, zIndex: 100 }}>
+                <NotificationBell />
+              </div>
+              {urlProjectId ? (
+                <ProjectAccessProvider key={urlProjectId} projectId={urlProjectId}>
+                  <Outlet />
+                  <ProjectNotificationCenter projectId={urlProjectId} />
+                </ProjectAccessProvider>
+              ) : (
+                <Outlet />
+              )}
             </ProjectNotificationProvider>
           </div>
         </Content>

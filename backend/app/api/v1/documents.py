@@ -12,6 +12,27 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.services.permissions import (
+    get_project_access,
+    PERM_DOCUMENT_EDIT,
+    PERM_DOCUMENT_UPLOAD,
+    PERM_DOCUMENT_VIEW,
+    PERM_EXPORT_DEMO,
+    PERM_EXPORT_FORMAL,
+    PERM_EXPORT_VIEW,
+    PERM_FACT_EDIT,
+    PERM_FACT_VIEW,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_PROJECT_VIEW,
+    PERM_SCORING_VIEW,
+    PERM_STORYBOARD_EDIT,
+    PERM_STORYBOARD_VIEW,
+    PERM_VIDEO_EDIT,
+    PERM_VIDEO_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.config import settings
 from app.core.storage import storage
@@ -38,11 +59,9 @@ ALLOWED_TYPES = {".pdf", ".docx", ".txt"}
 MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB，超过走分片上传
 
 
-def _get_owned_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_owned_project(db: Session, project_id: str, user: User, permission: str = PERM_DOCUMENT_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _safe_filename(name: str) -> str:
@@ -169,7 +188,7 @@ async def upload_document(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceDocument:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_UPLOAD)
 
     original_name = _safe_filename(file.filename or "未命名文件")
     ext = Path(original_name).suffix.lower()
@@ -236,7 +255,7 @@ def create_resumable_upload(
     current: User = Depends(get_current_user),
 ) -> ResumableUploadOut:
     """为超过普通上传上限的资料创建可断点续传会话。"""
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_UPLOAD)
     original_name = _safe_filename(payload.file_name)
     ext = Path(original_name).suffix.lower()
     if ext not in ALLOWED_TYPES:
@@ -276,7 +295,7 @@ def get_resumable_upload(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> ResumableUploadOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_VIEW)
     return _upload_out(_get_owned_upload(db, project_id, upload_id, current))
 
 
@@ -289,7 +308,7 @@ async def upload_resumable_chunk(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> ResumableUploadOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_VIEW)
     session = _get_owned_upload(db, project_id, upload_id, current)
     if session.status != "uploading":
         raise ConflictError("该上传任务不能继续接收分片")
@@ -336,7 +355,7 @@ def complete_resumable_upload(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceDocument:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_UPLOAD)
     session = _get_owned_upload(db, project_id, upload_id, current)
     if session.status == "completed" and session.document_id:
         doc = db.get(SourceDocument, session.document_id)
@@ -415,7 +434,7 @@ def cancel_resumable_upload(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_UPLOAD)
     session = _get_owned_upload(db, project_id, upload_id, current)
     if session.status == "completed":
         raise ConflictError("已完成的上传不能取消")
@@ -430,7 +449,7 @@ def list_documents(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[SourceDocument]:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_VIEW)
     return (
         db.query(SourceDocument)
         .filter(SourceDocument.project_id == project_id)
@@ -451,7 +470,7 @@ def search_documents(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[SearchResult]:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_VIEW)
     from app.models.document_chunk import DocumentChunk
 
     if not q.strip():
@@ -497,7 +516,7 @@ def get_document(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceDocument:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_VIEW)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")
@@ -511,7 +530,7 @@ def get_document_toc(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_VIEW)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")
@@ -546,7 +565,7 @@ def reparse_document(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceDocument:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_EDIT)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")
@@ -572,7 +591,7 @@ def update_params(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceDocument:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_EDIT)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")
@@ -590,7 +609,7 @@ def update_document(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceDocument:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_EDIT)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")
@@ -609,7 +628,7 @@ def delete_document(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_DOCUMENT_EDIT)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")

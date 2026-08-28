@@ -24,6 +24,8 @@ import {
 import { useNavigate, useParams } from 'react-router-dom'
 import { factApi } from '../api'
 import type { ExtractedFact } from '../api/types'
+import { CollabEntry } from '../components/collab/CollabEntry'
+import { useProjectPermissions } from '../hooks/useProjectPermissions'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -172,12 +174,16 @@ export default function Facts() {
     setSortOrder('ascend')
   }
 
+  const { has } = useProjectPermissions()
+  const canEditFacts = has('fact.edit')
+
   const handleConfirm = async (fact: ExtractedFact) => {
     try {
       await factApi.confirm(projectId, fact.id, {
         status: 'confirmed',
         fact_value: confirmValue || fact.fact_value,
         unit: confirmUnit || fact.unit || undefined,
+        base_revision: fact.revision,
       })
       message.success('已确认，该信息可作为正式事实使用')
       setConfirmModal(null)
@@ -189,7 +195,7 @@ export default function Facts() {
 
   const handleReject = async (fact: ExtractedFact) => {
     try {
-      await factApi.confirm(projectId, fact.id, { status: 'rejected' })
+      await factApi.confirm(projectId, fact.id, { status: 'rejected', base_revision: fact.revision })
       message.success('已忽略，该信息仍保留在历史记录中')
       fetchFacts()
     } catch {
@@ -295,7 +301,8 @@ export default function Facts() {
       width: 180,
       render: (_: unknown, fact: ExtractedFact) => (
         <Space>
-          {fact.verification_status !== 'confirmed' && (
+          {!canEditFacts && <Text type="secondary" style={{ fontSize: 12 }}>只读</Text>}
+          {canEditFacts && fact.verification_status !== 'confirmed' && (
             <Button
               size="small"
               type="primary"
@@ -305,7 +312,7 @@ export default function Facts() {
               确认
             </Button>
           )}
-          {fact.verification_status !== 'rejected' && (
+          {canEditFacts && fact.verification_status !== 'rejected' && (
             <Button size="small" danger icon={<CloseCircleOutlined />} onClick={() => handleReject(fact)}>
               忽略
             </Button>
@@ -334,6 +341,9 @@ export default function Facts() {
       <div className="facts-toolbar">
         <Text type="secondary">共保留 {allFacts.length} 条证据，当前显示 {facts.length} 条</Text>
         <Space wrap>
+          {projectId && (
+            <CollabEntry projectId={projectId} targetType="facts" label="协作与审核" />
+          )}
           <Input.Search
             allowClear
             value={search}

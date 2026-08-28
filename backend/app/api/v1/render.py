@@ -14,6 +14,13 @@ from app.adapters.factory import get_image_adapter, image_provider_info
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.services.permissions import (
+    get_project_access,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.core.storage import storage
@@ -66,11 +73,9 @@ CAMERA_ANGLES = [
 ]
 
 
-def _get_owned_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_owned_project(db: Session, project_id: str, user: User, permission: str = PERM_MEDIA_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _get_owned_asset(db: Session, project_id: str, asset_id: str, user: User) -> Asset:
@@ -129,7 +134,7 @@ async def upload_source_image(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> SourceImageOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
 
     content = await file.read()
     fname = safe_filename(file.filename or "模型截图")
@@ -221,7 +226,7 @@ def list_source_images(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     assets = (
         db.query(Asset)
         .filter(Asset.project_id == project_id, Asset.source.in_(["model_shot", "render"]))
@@ -293,7 +298,7 @@ def create_render_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderJob:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
 
     # 幂等键检查
     if payload.idempotency_key:
@@ -452,7 +457,7 @@ def list_render_tasks(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[RenderTaskOut]:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     query = db.query(RenderJob).filter(RenderJob.project_id == project_id)
     if status:
         query = query.filter(RenderJob.status == status)
@@ -467,7 +472,7 @@ def get_render_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderTaskOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     job = db.get(RenderJob, task_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("渲染任务不存在")
@@ -481,7 +486,7 @@ def retry_render_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderTaskOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     job = db.get(RenderJob, task_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("渲染任务不存在")
@@ -503,7 +508,7 @@ def cancel_render_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderTaskOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     job = db.get(RenderJob, task_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("渲染任务不存在")
@@ -522,7 +527,7 @@ def render_task_results(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[RenderVersion]:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     job = db.get(RenderJob, task_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("渲染任务不存在")
@@ -548,7 +553,7 @@ def list_versions(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[RenderVersion]:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     query = db.query(RenderVersion).filter(RenderVersion.is_deleted.is_(False))
     if source_asset_id:
         query = query.filter(RenderVersion.source_asset_id == source_asset_id)
@@ -562,7 +567,7 @@ def get_version(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderVersion:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     v = db.get(RenderVersion, version_id)
     if not v or v.is_deleted:
         raise NotFoundError("版本不存在")
@@ -577,7 +582,7 @@ def delete_version(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     try:
         soft_delete_version(db, project_id, version_id, current.username)
     except RuntimeError as exc:
@@ -591,7 +596,7 @@ def compare_versions(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     src = db.get(Asset, payload.source_asset_id)
     if not src or src.project_id != project_id:
         raise NotFoundError("源图不存在")
@@ -628,7 +633,7 @@ async def upload_mask(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> MaskUploadOut:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     content = await file.read()
     try:
         from PIL import Image as PILImage
@@ -674,7 +679,7 @@ def inpaint(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderJob:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     _get_owned_asset(db, project_id, payload.source_asset_id, current)
     mask = db.get(Asset, payload.mask_asset_id)
     if not mask or mask.project_id != project_id:
@@ -730,7 +735,7 @@ def outpaint(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderJob:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     _get_owned_asset(db, project_id, payload.source_asset_id, current)
     adapter = get_image_adapter()
     if not adapter.supports("outpaint"):
@@ -769,7 +774,7 @@ def upscale(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderJob:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     _get_owned_asset(db, project_id, payload.source_asset_id, current)
     adapter = get_image_adapter()
     if not adapter.supports("upscale"):
@@ -793,7 +798,7 @@ def render_audit(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     from app.models.render_job import RenderJob
 
     jobs = (

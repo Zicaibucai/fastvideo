@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { message } from 'antd'
+import { Modal, message } from 'antd'
 
 type ValidationErrorItem = {
   loc?: Array<string | number>
@@ -32,6 +32,16 @@ api.interceptors.response.use(
       if (!window.location.pathname.startsWith('/login')) {
         window.location.href = '/login'
       }
+    } else if (status === 409 && data?.detail?.conflict === 'revision') {
+      // 并发编辑冲突：不静默覆盖，允许用户重新加载服务器版本；
+      // 未提交的编辑内容保留在页面上供复制或比较。
+      Modal.confirm({
+        title: '内容刚被其他成员修改',
+        content: `${msg}（服务器版本 r${data.detail.server_revision}，你基于 r${data.detail.base_revision}）。选择「保留我的编辑」可留在当前页面复制你的修改内容。`,
+        okText: '加载最新版本',
+        cancelText: '保留我的编辑',
+        onOk: () => window.location.reload(),
+      })
     } else {
       message.error(msg)
     }

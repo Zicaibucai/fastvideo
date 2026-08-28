@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, JSON, String, Text
+from sqlalchemy import ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -50,6 +50,9 @@ class VideoProject(StatusValidationMixin, BaseModel):
     output_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     watermark_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # 乐观锁版本号（并发编辑保护）
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
 
     project = relationship("Project", back_populates="video_projects")
     export_tasks = relationship(

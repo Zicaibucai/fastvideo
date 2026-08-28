@@ -40,9 +40,17 @@ import {
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { assetApi, videoGenApi } from '../api'
-import { withAuthToken } from '../api/client'
 import type { Asset, VideoGenerationJob, VideoTemplateDraft } from '../api/types'
 import ConstructionRecipeEditor from '../components/ConstructionRecipeEditor'
+import TemplateRecipeOverview from '../components/video-template/TemplateRecipeOverview'
+import {
+  fileUrl,
+  MAX_REFERENCE_IMAGES,
+  recipeText,
+  TEMPLATE_MODE_LABELS,
+  templateDraftStorageKey,
+  type TemplateGenerationMode,
+} from '../features/video-template/recipe'
 
 const { Title, Text, Paragraph } = Typography
 const { Dragger } = Upload
@@ -55,75 +63,6 @@ const STEPS = [
   { title: '模板提示词', description: '编辑 AI 配方', icon: <RobotOutlined /> },
   { title: '试生成并发布', description: '验证模板效果', icon: <ThunderboltOutlined /> },
 ]
-
-type TemplateGenerationMode = 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
-const MAX_REFERENCE_IMAGES = 9
-
-const TEMPLATE_MODE_LABELS: Record<TemplateGenerationMode, string> = {
-  image_to_video: '单图生成',
-  first_last_frame_video: '首尾帧生成',
-  multi_reference_video: '多图生成',
-}
-
-const fileUrl = (key?: string) => {
-  if (!key) return ''
-  return withAuthToken(key.startsWith('/') || /^https?:\/\//i.test(key) ? key : `/files/${key}`)
-}
-
-const templateDraftStorageKey = (projectId: string) => `fastvideo:template-draft:${projectId}`
-
-const recipeText = (recipe: Record<string, any> | undefined, key: string, fallback = '') => {
-  const value = recipe?.[key]
-  if (typeof value !== 'string') return fallback
-  if (key === 'prompt' && value.trim().startsWith('{')) {
-    try {
-      const parsed = JSON.parse(value)
-      if (parsed && typeof parsed.prompt === 'string') return parsed.prompt
-    } catch {
-      // 兼容旧版本已经保存的普通文本提示词。
-    }
-  }
-  return value
-}
-
-const recipeItems = (value: any, fallback: string[] = []) => {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean)
-  if (typeof value === 'string' && value.trim()) {
-    return value.split(/[；;、,，\n]+/).map((item) => item.trim()).filter(Boolean)
-  }
-  return fallback
-}
-
-const recipeTimeline = (value: any) => {
-  if (Array.isArray(value)) {
-    const rows = value
-      .filter((item) => item && typeof item === 'object')
-      .map((item) => ({
-        from: Math.max(0, Math.min(100, Number(item.from ?? item.start ?? 0))),
-        to: Math.max(0, Math.min(100, Number(item.to ?? item.end ?? 100))),
-        instruction: String(item.instruction || item.description || item.prompt || '').trim(),
-      }))
-      .filter((item) => item.instruction)
-    if (rows.length) return rows
-  }
-  if (typeof value === 'string' && value.trim()) {
-    return [
-      { from: 0, to: 20, instruction: '建立首帧构图，锁定建筑主体与空间关系' },
-      { from: 20, to: 80, instruction: value.trim() },
-      { from: 80, to: 100, instruction: '平稳过渡至尾帧并减速定格，保持结构连续' },
-    ]
-  }
-  return [
-    { from: 0, to: 20, instruction: '建立首帧构图，镜头开始缓慢移动' },
-    { from: 20, to: 80, instruction: '保持建筑主体稳定，呈现自然空间变化' },
-    { from: 80, to: 100, instruction: '平稳到达尾帧构图并减速定格' },
-  ]
-}
-
-const recipeCamera = (value: any) => {
-  if (value && typeof value === 'object') return value
-  return { type: String(value || '稳定运镜'), speed: '平稳', direction: '-', path: '-', intensity: '低' }
-}
 
 export default function VideoTemplateCreator() {
   const { projectId = '' } = useParams()
@@ -1173,77 +1112,7 @@ export default function VideoTemplateCreator() {
                     onChange={setRecipe}
                     defaultOpen={false}
                   />
-                  <Card size="small" title="AI 生成的结构化配方" className="video-template-recipe-card">
-                    {(() => {
-                      const camera = recipeCamera(recipe.camera)
-                      const timeline = recipeTimeline(recipe.timeline)
-                      const preserve = recipeItems(recipe.preserve, ['锁定建筑主体数量、体量、轮廓、层数', '保持道路、主入口和主要构件位置', '保持首尾帧构图和空间关系'])
-                      const allowChange = recipeItems(recipe.allow_change, ['轻微光影变化', '树木、云层、人物和车辆的自然微动'])
-                      const negative = recipeItems(recipe.negative || recipe.negative_prompt, ['变形', '模糊', '结构错位', '透视错误'])
-                      const recommended = recipe?.recommended && typeof recipe.recommended === 'object' ? recipe.recommended : {}
-                      return (
-                        <div className="video-template-recipe-content">
-                          <div className="video-template-recipe-summary">
-                            <Tag color="blue">{recipe.category || '建筑外景运镜'}</Tag>
-                            {recipeItems(recipe.generation_modes).map((mode) => <Tag key={mode}>{mode}</Tag>)}
-                            <Text type="secondary">模型已将镜头规则拆成可编辑字段</Text>
-                          </div>
-
-                          <section className="video-template-recipe-section">
-                            <div className="video-template-recipe-section-title"><Text strong>运镜类型</Text><Text type="secondary">镜头路径与节奏</Text></div>
-                            <div className="video-template-camera-grid">
-                              {[
-                                ['类型', camera.type],
-                                ['速度', camera.speed],
-                                ['方向', camera.direction],
-                                ['路径', camera.path],
-                                ['强度', camera.intensity],
-                              ].map(([label, value]) => <div className="video-template-camera-item" key={label}><Text type="secondary">{label}</Text><Text strong>{String(value || '-')}</Text></div>)}
-                            </div>
-                          </section>
-
-                          <section className="video-template-recipe-section">
-                            <div className="video-template-recipe-section-title"><Text strong>时间轴</Text><Text type="secondary">0%-100% 镜头阶段</Text></div>
-                            <div className="video-template-recipe-timeline">
-                              {timeline.map((item, index) => {
-                                const from = Math.max(0, Math.min(100, Number(item.from) || 0))
-                                const to = Math.max(from, Math.min(100, Number(item.to) || 0))
-                                return <div className="video-template-recipe-timeline-row" key={`${item.from}-${item.to}-${index}`}>
-                                  <div className="video-template-recipe-timeline-label"><Text strong>{from}%-{to}%</Text><Text>{item.instruction}</Text></div>
-                                  <div className="video-template-recipe-timeline-track"><span style={{ marginLeft: `${from}%`, width: `${Math.max(5, to - from)}%` }} /></div>
-                                </div>
-                              })}
-                            </div>
-                          </section>
-
-                          <div className="video-template-recipe-list-grid">
-                            <section className="video-template-recipe-section">
-                              <div className="video-template-recipe-section-title"><Text strong>建筑保持项</Text><Text type="secondary">生成时锁定</Text></div>
-                              <div className="video-template-recipe-tags">{preserve.map((item) => <Tag color="green" key={item}>{item}</Tag>)}</div>
-                            </section>
-                            <section className="video-template-recipe-section">
-                              <div className="video-template-recipe-section-title"><Text strong>允许变化</Text><Text type="secondary">仅限自然微动</Text></div>
-                              <div className="video-template-recipe-tags">{allowChange.map((item) => <Tag key={item}>{item}</Tag>)}</div>
-                            </section>
-                          </div>
-
-                          <section className="video-template-recipe-section">
-                            <div className="video-template-recipe-section-title"><Text strong>负向提示词</Text><Text type="secondary">自动加入生成约束</Text></div>
-                            <div className="video-template-recipe-tags video-template-recipe-negative">{negative.map((item) => <Tag key={item}>{item}</Tag>)}</div>
-                          </section>
-
-                          <section className="video-template-recipe-section video-template-recommended-section">
-                            <div className="video-template-recipe-section-title"><Text strong>推荐参数</Text><Text type="secondary">试生成会按此配置提交</Text></div>
-                            <div className="video-template-recommended-grid">
-                              <div><Text type="secondary">时长</Text><Text strong>{String(recommended.duration || '5 秒')}</Text></div>
-                              <div><Text type="secondary">比例</Text><Text strong>{String(recommended.aspect_ratio || 'adaptive')}</Text></div>
-                              <div><Text type="secondary">分辨率</Text><Text strong>{String(recommended.resolution || '720p')}</Text></div>
-                            </div>
-                          </section>
-                        </div>
-                      )
-                    })()}
-                  </Card>
+                  <TemplateRecipeOverview recipe={recipe} />
                 </Col>
               </Row>
             )}

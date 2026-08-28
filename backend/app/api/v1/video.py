@@ -11,6 +11,17 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.services.revision import bump_revision, check_revision
+from app.services.review_service import on_target_content_changed
+from app.services.permissions import (
+    accessible_project_ids,
+    get_project_access,
+    PERM_EXPORT_DEMO,
+    PERM_EXPORT_FORMAL,
+    PERM_EXPORT_VIEW,
+    PERM_VIDEO_EDIT,
+    PERM_VIDEO_VIEW,
+)
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.storage import storage
 from app.models.asset import Asset
@@ -50,21 +61,24 @@ from app.tasks.video_export import render_segment_sync, render_segment_task
 router = APIRouter(tags=["视频工程与导出"])
 
 
-def _get_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_project(
+    db: Session, project_id: str, user: User, permission: str = PERM_VIDEO_VIEW
+) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
-def _get_owned_vp(db: Session, vp_id: str, user: User) -> VideoProject:
+def _get_owned_vp(
+    db: Session, vp_id: str, user: User, permission: str = PERM_VIDEO_VIEW
+) -> VideoProject:
     vp = db.get(VideoProject, vp_id)
     if not vp:
         raise NotFoundError("视频工程不存在")
     if vp.project_id:
-        project = db.get(Project, vp.project_id)
-        if not project or project.owner_id != user.id:
-            raise NotFoundError("视频工程不存在")
+        try:
+            get_project_access(db, vp.project_id, user, permission)
+        except NotFoundError:
+            raise NotFoundError("视频工程不存在") from None
     return vp
 
 
@@ -133,6 +147,7 @@ def _segment_out(db: Session, seg: VideoSegment) -> VideoSegmentOut:
     source_duration = visual_asset.duration_seconds if has_visual else None
     playback_speed = round(source_duration / seg.duration, 4) if source_duration and seg.duration else None
     return VideoSegmentOut(
+        revision=seg.revision or 1,
         id=seg.id,
         video_project_id=seg.video_project_id,
         storyboard_shot_id=seg.storyboard_shot_id,
@@ -205,7 +220,7 @@ def list_video_projects(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[VideoProject]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VIDEO_VIEW)
     return (
         db.query(VideoProject)
         .filter(VideoProject.project_id == project_id)
@@ -221,7 +236,7 @@ def create_video_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VideoProject:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VIDEO_EDIT)
     data = payload.model_dump(exclude={"project_id"}, exclude_none=True)
     if "fps" in data and data["fps"] not in (24, 25, 30):
         raise ConflictError("fps 仅支持 24/25/30")
@@ -253,7 +268,7 @@ def get_video_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VideoProject:
-    return _get_owned_vp(db, vp_id, current)
+    return _get_owned_vp(db, vp_id, current, PERM_VIDEO_VIEW)
 
 
 @router.patch("/video-projects/{vp_id}", response_model=VideoProjectOut, summary="更新视频工程")
@@ -263,8 +278,9 @@ def update_video_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VideoProject:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
+    check_revision(vp, data.pop("base_revision", None))
     if "fps" in data and data["fps"] not in (24, 25, 30):
         raise ConflictError("fps 仅支持 24/25/30")
     if "music_tracks" in data and data["music_tracks"] is not None:
@@ -284,6 +300,11 @@ def update_video_project(
                     raise ConflictError("视频工程时间轴只能使用视频素材")
     for field, value in data.items():
         setattr(vp, field, value)
+    bump_revision(vp)
+    db.flush()
+    on_target_content_changed(
+        db, project_id=vp.project_id, target_type="video_project", target_id=vp.id, actor=current
+    )
     db.commit()
     db.refresh(vp)
     return vp
@@ -295,7 +316,7 @@ def delete_video_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     db.delete(vp)
     db.commit()
 
@@ -310,7 +331,7 @@ def sync_storyboard(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     result = sync_storyboard_to_video_project(db, vp, current)
     segs = (
         db.query(VideoSegment)
@@ -333,7 +354,7 @@ def list_segments(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[VideoSegmentOut]:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_VIEW)
     sync_storyboard_to_video_project(db, vp, current)
     segs = (
         db.query(VideoSegment)
@@ -352,11 +373,12 @@ def patch_segment(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VideoSegmentOut:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     seg = db.get(VideoSegment, segment_id)
     if not seg or seg.video_project_id != vp.id:
         raise NotFoundError("分段不存在")
     data = payload.model_dump(exclude_unset=True, exclude_none=True)
+    check_revision(seg, data.pop("base_revision", None))
     if "visual_asset_id" in data and data["visual_asset_id"]:
         asset = db.get(Asset, data["visual_asset_id"])
         if not asset or asset.project_id != vp.project_id:
@@ -383,6 +405,12 @@ def patch_segment(
         seg.output_key = None
         seg.render_progress = 0
         seg.rendered_at = None
+    bump_revision(seg)
+    bump_revision(vp)
+    db.flush()
+    on_target_content_changed(
+        db, project_id=vp.project_id, target_type="video_project", target_id=vp.id, actor=current
+    )
     db.commit()
     db.refresh(seg)
     return _segment_out(db, seg)
@@ -395,7 +423,7 @@ def reorder_segments(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[VideoSegmentOut]:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     segs = {s.id: s for s in db.query(VideoSegment).filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status != "skipped").all()}
     for index, sid in enumerate(payload.segment_ids, start=1):
         if sid in segs:
@@ -443,7 +471,7 @@ def render_single_segment(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     seg = db.get(VideoSegment, segment_id)
     if not seg or seg.video_project_id != vp.id:
         raise NotFoundError("分段不存在")
@@ -458,7 +486,7 @@ def preview_single_segment(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     seg = db.get(VideoSegment, segment_id)
     if not seg or seg.video_project_id != vp.id:
         raise NotFoundError("分段不存在")
@@ -482,7 +510,7 @@ def download_segment(
     current: User = Depends(get_current_user),
 ) -> Response:
     """下载当前视频工程中已经合成的单个分段。"""
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_VIEW)
     seg = db.get(VideoSegment, segment_id)
     if not seg or seg.video_project_id != vp.id:
         raise NotFoundError("分段不存在")
@@ -499,7 +527,7 @@ def retry_single_segment(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     seg = db.get(VideoSegment, segment_id)
     if not seg or seg.video_project_id != vp.id:
         raise NotFoundError("分段不存在")
@@ -519,7 +547,7 @@ def render_all_segments(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_EDIT)
     segs = (
         db.query(VideoSegment)
         .filter(VideoSegment.video_project_id == vp.id, VideoSegment.render_status != "skipped")
@@ -567,18 +595,11 @@ def video_preflight(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_VIDEO_VIEW)
     if mode not in ("demo", "formal"):
         raise ConflictError("mode 仅支持 demo / formal")
     result = preflight(db, vp, mode)
-    return PreflightOut(
-        ok=result["ok"],
-        mode=result["mode"],
-        issues=result["issues"],
-        segment_count=result["segment_count"],
-        rendered_segment_count=result["rendered_segment_count"],
-        missing_render_count=result["missing_render_count"],
-    )
+    return PreflightOut(**result)
 
 
 # ============================================================
@@ -601,7 +622,7 @@ def export_demo(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> ExportStartOut:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_EXPORT_DEMO)
     return _start_export(db, vp, "demo", current)
 
 
@@ -611,7 +632,7 @@ def export_formal(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> ExportStartOut:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_EXPORT_FORMAL)
     return _start_export(db, vp, "formal", current)
 
 
@@ -621,7 +642,7 @@ def list_vp_exports(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[ExportTaskOut]:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_EXPORT_VIEW)
     ets = (
         db.query(ExportTask)
         .filter(ExportTask.video_project_id == vp.id)
@@ -641,7 +662,7 @@ def get_export(
     et = db.get(ExportTask, export_id)
     if not et:
         raise NotFoundError("导出任务不存在")
-    _get_owned_vp(db, et.video_project_id, current)
+    _get_owned_vp(db, et.video_project_id, current, PERM_EXPORT_VIEW)
     return _export_out(db, et)
 
 
@@ -654,7 +675,7 @@ def cancel_export(
     et = db.get(ExportTask, export_id)
     if not et:
         raise NotFoundError("导出任务不存在")
-    _get_owned_vp(db, et.video_project_id, current)
+    _get_owned_vp(db, et.video_project_id, current, PERM_VIDEO_EDIT)
     if et.status in ("queued", "running"):
         et.status = "cancelled"
         db.commit()
@@ -671,7 +692,12 @@ def retry_export(
     et = db.get(ExportTask, export_id)
     if not et:
         raise NotFoundError("导出任务不存在")
-    vp = _get_owned_vp(db, et.video_project_id, current)
+    vp = _get_owned_vp(
+        db,
+        et.video_project_id,
+        current,
+        PERM_EXPORT_FORMAL if et.mode == "formal" else PERM_EXPORT_DEMO,
+    )
     if et.status not in ("failed", "cancelled"):
         raise ConflictError("仅失败或已取消的导出可重试")
     et.status = "queued"
@@ -700,7 +726,7 @@ def download_export(
     et = db.get(ExportTask, export_id)
     if not et:
         raise NotFoundError("导出任务不存在")
-    _get_owned_vp(db, et.video_project_id, current)
+    _get_owned_vp(db, et.video_project_id, current, PERM_EXPORT_VIEW)
     if not et.output_key or not storage.exists(et.output_key):
         raise NotFoundError("导出文件不存在")
     data = storage.load(et.output_key)
@@ -716,7 +742,7 @@ def download_export_srt(
     et = db.get(ExportTask, export_id)
     if not et:
         raise NotFoundError("导出任务不存在")
-    _get_owned_vp(db, et.video_project_id, current)
+    _get_owned_vp(db, et.video_project_id, current, PERM_EXPORT_VIEW)
     if not et.srt_key or not storage.exists(et.srt_key):
         raise NotFoundError("SRT 文件不存在")
     data = storage.load(et.srt_key)
@@ -732,7 +758,7 @@ def download_export_report(
     et = db.get(ExportTask, export_id)
     if not et:
         raise NotFoundError("导出任务不存在")
-    _get_owned_vp(db, et.video_project_id, current)
+    _get_owned_vp(db, et.video_project_id, current, PERM_EXPORT_VIEW)
     if not et.report_key or not storage.exists(et.report_key):
         raise NotFoundError("导出报告不存在")
     data = storage.load(et.report_key)
@@ -750,7 +776,7 @@ def start_export(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    vp = _get_owned_vp(db, vp_id, current)
+    vp = _get_owned_vp(db, vp_id, current, PERM_EXPORT_DEMO)
 
     export_task = ExportTask(
         video_project_id=vp_id,

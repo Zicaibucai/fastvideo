@@ -62,6 +62,7 @@ class StoryboardShotUpdate(BaseModel):
     fact_check_status: str | None = None
     source_page: int | None = None
     status: str | None = None
+    base_revision: int | None = Field(default=None, description="乐观锁版本，不一致返回 409")
 
 
 class NarrationDocumentShotUpdate(BaseModel):

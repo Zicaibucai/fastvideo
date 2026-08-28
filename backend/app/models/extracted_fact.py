@@ -41,5 +41,8 @@ class ExtractedFact(BaseModel):
     candidates: Mapped[list | None] = mapped_column(JSON, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # 乐观锁版本号（并发编辑保护）
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+
     project = relationship("Project")
     document = relationship("SourceDocument", lazy="selectin")

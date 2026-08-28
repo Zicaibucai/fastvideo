@@ -15,6 +15,27 @@ from sqlalchemy.orm import Session
 from app.adapters.factory import get_tts_adapter, tts_provider_info
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.services.permissions import (
+    get_project_access,
+    PERM_DOCUMENT_EDIT,
+    PERM_DOCUMENT_UPLOAD,
+    PERM_DOCUMENT_VIEW,
+    PERM_EXPORT_DEMO,
+    PERM_EXPORT_FORMAL,
+    PERM_EXPORT_VIEW,
+    PERM_FACT_EDIT,
+    PERM_FACT_VIEW,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_PROJECT_VIEW,
+    PERM_SCORING_VIEW,
+    PERM_STORYBOARD_EDIT,
+    PERM_STORYBOARD_VIEW,
+    PERM_VIDEO_EDIT,
+    PERM_VIDEO_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.core.storage import storage
 from app.models.asset import Asset
@@ -43,11 +64,9 @@ SPEAKING_STYLES = [
 ]
 
 
-def _get_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_project(db: Session, project_id: str, user: User, permission: str = PERM_VOICE_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _get_template(db: Session, template_id: str, *, include_disabled: bool = True) -> VoiceTemplate:
@@ -124,7 +143,7 @@ def list_voices(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[VoiceTemplate]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_VIEW)
     return (
         db.query(VoiceTemplate)
         .filter((VoiceTemplate.project_id == project_id) | VoiceTemplate.is_system)
@@ -140,7 +159,7 @@ def create_voice(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VoiceTemplate:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     if payload.is_system and not current.is_superuser:
         raise ForbiddenError("普通用户不能创建系统模板。")
     data = _payload_to_model(payload)
@@ -163,7 +182,7 @@ def update_voice(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VoiceTemplate:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     v = _get_template(db, voice_id)
     _check_editable(v, current)
     data = payload.model_dump(exclude_unset=True)
@@ -186,7 +205,7 @@ def delete_voice(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_VOICE_EDIT)
     v = _get_template(db, voice_id)
     _check_editable(v, current)
     db.delete(v)

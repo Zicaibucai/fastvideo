@@ -19,6 +19,16 @@ from app.models.storyboard_shot import StoryboardShot
 from app.models.user import User
 from app.schemas.common import Page
 from app.schemas.project import ProjectCreate, ProjectDetail, ProjectOut, ProjectUpdate
+from app.services.revision import check_revision
+from app.services.permissions import (
+    accessible_project_ids,
+    ensure_owner_member,
+    get_project_access,
+    PERM_PROJECT_DELETE,
+    PERM_PROJECT_EDIT,
+    PERM_PROJECT_VIEW,
+    PERM_REVIEW_POLICY,
+)
 
 router = APIRouter(prefix="/projects", tags=["项目"])
 
@@ -37,7 +47,17 @@ def _with_stats(db: Session, project: Project, user_id: str) -> ProjectDetail:
     base.doc_count = doc_count
     base.shot_count = shot_count
     base.asset_count = asset_count
+    access = get_project_access(db, project.id, _load_user(db, user_id))
+    base.my_role = access.role
+    base.my_permissions = sorted(access.permissions)
     return base
+
+
+def _load_user(db: Session, user_id: str) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise NotFoundError("用户不存在")
+    return user
 
 
 def _with_stats_bulk(db: Session, projects: list[Project]) -> list[ProjectOut]:
@@ -102,7 +122,10 @@ def list_projects(
         order_clauses.append(
             Project.created_at.desc() if sort_order == "desc" else Project.created_at.asc()
         )
-    stmt = select(Project).where(Project.owner_id == current.id).order_by(*order_clauses)
+    project_ids = accessible_project_ids(db, current)
+    stmt = select(Project).order_by(*order_clauses)
+    if project_ids is not None:
+        stmt = stmt.where(Project.id.in_(project_ids))
     if status:
         stmt = stmt.where(Project.status == status)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
@@ -129,6 +152,8 @@ def create_project(
         description=payload.description,
     )
     db.add(project)
+    db.flush()
+    ensure_owner_member(db, project)
     db.commit()
     db.refresh(project)
     return project
@@ -140,10 +165,8 @@ def get_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> ProjectDetail:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != current.id:
-        raise NotFoundError("项目不存在")
-    return _with_stats(db, project, current.id)
+    access = get_project_access(db, project_id, current, PERM_PROJECT_VIEW)
+    return _with_stats(db, access.project, current.id)
 
 
 @router.post("/{project_id}/enter", response_model=ProjectOut, summary="记录进入项目")
@@ -153,9 +176,8 @@ def enter_project(
     current: User = Depends(get_current_user),
 ) -> Project:
     """Record an intentional project visit without making GET stateful."""
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != current.id:
-        raise NotFoundError("项目不存在")
+    access = get_project_access(db, project_id, current, PERM_PROJECT_VIEW)
+    project = access.project
     project.last_entered_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(project)
@@ -169,12 +191,16 @@ def update_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != current.id:
-        raise NotFoundError("项目不存在")
+    access = get_project_access(db, project_id, current, PERM_PROJECT_EDIT)
+    project = access.project
     data = payload.model_dump(exclude_unset=True)
+    check_revision(project, data.pop("base_revision", None))
+    # review_policy 变更需要专门权限
+    if "review_policy" in data:
+        access.require(PERM_REVIEW_POLICY)
     for field, value in data.items():
         setattr(project, field, value)
+    project.revision = (project.revision or 1) + 1
     db.commit()
     db.refresh(project)
     return project
@@ -186,8 +212,19 @@ def delete_project(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != current.id:
-        raise NotFoundError("项目不存在")
+    access = get_project_access(db, project_id, current, PERM_PROJECT_DELETE)
+    project = access.project
+    from app.services.audit import log_action
+
+    log_action(
+        db,
+        user=current,
+        project_id=project.id,
+        action="project_delete",
+        entity_type="project",
+        entity_id=project.id,
+        detail={"name": project.name},
+        commit=False,
+    )
     db.delete(project)
     db.commit()

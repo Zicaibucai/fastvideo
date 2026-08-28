@@ -84,6 +84,30 @@ def update_user(
         data["hashed_password"] = hash_password(data.pop("password"))
     for field, value in data.items():
         setattr(user, field, value)
+    # 平台账号停用/恢复联动项目成员状态（成员关系保留但不可继续操作）
+    if "is_active" in data:
+        from app.services.collaboration_service import (
+            restore_user_memberships,
+            suspend_inactive_user_memberships,
+        )
+
+        if data["is_active"] is False:
+            affected = suspend_inactive_user_memberships(db, user.id)
+        else:
+            affected = restore_user_memberships(db, user.id)
+        if affected:
+            from app.services.audit import log_action
+
+            log_action(
+                db,
+                user=current,
+                project_id=None,
+                action="user_membership_sync",
+                entity_type="user",
+                entity_id=user.id,
+                detail={"is_active": data["is_active"], "affected_memberships": affected},
+                commit=False,
+            )
     db.commit()
     db.refresh(user)
     return user

@@ -7,6 +7,29 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.services.revision import bump_revision, check_revision
+from app.services.review_service import on_target_content_changed
+from app.services.permissions import (
+    get_project_access,
+    PERM_DOCUMENT_EDIT,
+    PERM_DOCUMENT_UPLOAD,
+    PERM_DOCUMENT_VIEW,
+    PERM_EXPORT_DEMO,
+    PERM_EXPORT_FORMAL,
+    PERM_EXPORT_VIEW,
+    PERM_FACT_EDIT,
+    PERM_FACT_VIEW,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_PROJECT_VIEW,
+    PERM_SCORING_VIEW,
+    PERM_STORYBOARD_EDIT,
+    PERM_STORYBOARD_VIEW,
+    PERM_VIDEO_EDIT,
+    PERM_VIDEO_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import NotFoundError
 from app.models.asset import Asset
 from app.models.base import utc_now_iso
@@ -37,11 +60,9 @@ from app.tasks.narration import gen_narration_sync, gen_narration_task
 router = APIRouter(prefix="/projects/{project_id}/storyboard", tags=["分镜与解说词"])
 
 
-def _get_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_project(db: Session, project_id: str, user: User, permission: str = PERM_STORYBOARD_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _select_visual_version(
@@ -129,7 +150,7 @@ def storyboard_summary(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_VIEW)
     shots = (
         db.query(StoryboardShot)
         .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
@@ -164,7 +185,7 @@ def list_shots(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_VIEW)
     shots = (
         db.query(StoryboardShot)
         .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
@@ -200,7 +221,7 @@ def select_visual_version(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id or not shot.is_active:
         raise NotFoundError("分镜不存在")
@@ -225,7 +246,7 @@ def restore_visual_version(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id or not shot.is_active:
         raise NotFoundError("分镜不存在")
@@ -251,7 +272,7 @@ def create_shot(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> StoryboardShot:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     data = payload.model_dump()
     insert_at = data.pop("insert_at", None)
     if insert_at is not None:
@@ -283,7 +304,7 @@ def generate_narration(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     task = create_render_task(
         db,
         project_id=project_id,
@@ -325,7 +346,7 @@ def narration_evidence_run(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_VIEW)
     run = db.get(NarrationRun, run_id)
     if not run or run.project_id != project_id:
         raise NotFoundError("证据运行不存在")
@@ -357,7 +378,7 @@ def approve_narration_evidence(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     run = db.get(NarrationRun, run_id)
     if not run or run.project_id != project_id:
         raise NotFoundError("证据运行不存在")
@@ -388,7 +409,7 @@ def update_narration_document(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     shots = {
         shot.id: shot
         for shot in db.query(StoryboardShot)
@@ -419,6 +440,7 @@ def update_narration_document(
         shot.narration = item.narration
         shot.versions = versions
         shot.status = "edited"
+        bump_revision(shot)
         from app.services.voice_service import mark_shot_narration_changed
 
         mark_shot_narration_changed(db, shot, old_narration, item.narration)
@@ -428,6 +450,10 @@ def update_narration_document(
     from app.services.narration_engine import rebuild_project_narration_beats
 
     beat_count = rebuild_project_narration_beats(db, project_id)
+    if updated_count:
+        on_target_content_changed(
+            db, project_id=project_id, target_type="storyboard", actor=current
+        )
     db.commit()
     return {"updated_count": updated_count, "beat_count": beat_count}
 
@@ -438,7 +464,7 @@ def list_narration_beats(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[dict]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_VIEW)
     return [
         beat.to_dict()
         for beat in db.query(NarrationBeat)
@@ -455,7 +481,7 @@ def resegment_narration(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     task = create_render_task(
         db,
         project_id=project_id,
@@ -481,7 +507,7 @@ def get_shot(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> StoryboardShot:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_VIEW)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id:
         raise NotFoundError("分镜不存在")
@@ -496,12 +522,13 @@ def update_shot(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> StoryboardShot:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id:
         raise NotFoundError("分镜不存在")
 
     data = payload.model_dump(exclude_unset=True)
+    check_revision(shot, data.pop("base_revision", None))
 
     # 记录历史版本（每次编辑前）
     if "narration" in data and data["narration"] != shot.narration:
@@ -534,6 +561,15 @@ def update_shot(
 
         db.flush()
         rebuild_project_narration_beats(db, project_id)
+    bump_revision(shot)
+    db.flush()
+    # 分镜内容变更：审核状态联动（批准后变更自动失效）
+    on_target_content_changed(
+        db, project_id=project_id, target_type="shot", target_id=shot.id, actor=current
+    )
+    on_target_content_changed(
+        db, project_id=project_id, target_type="storyboard", actor=current
+    )
     db.commit()
     db.refresh(shot)
     return shot
@@ -548,7 +584,7 @@ def restore_shot_version(
     current: User = Depends(get_current_user),
 ) -> StoryboardShot:
     """payload: {"revision": 2}"""
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id:
         raise NotFoundError("分镜不存在")
@@ -583,7 +619,7 @@ def reorder_shots(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[StoryboardShot]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     shots = {
         shot.id: shot
         for shot in db.query(StoryboardShot)
@@ -614,7 +650,7 @@ def regenerate_shot(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> dict:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id:
         raise NotFoundError("分镜不存在")
@@ -644,7 +680,7 @@ def delete_shot(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_STORYBOARD_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id:
         raise NotFoundError("分镜不存在")

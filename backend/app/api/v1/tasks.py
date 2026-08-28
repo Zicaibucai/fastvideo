@@ -12,21 +12,31 @@ from app.models.project import Project
 from app.models.render_task import RenderTask
 from app.models.user import User
 from app.schemas.task import RenderTaskOut, TaskCancelRequest, TaskRetryRequest
+from app.services.permissions import (
+    accessible_project_ids,
+    get_project_access,
+    PERM_PROJECT_VIEW,
+    PERM_TASK_UPDATE,
+)
 
 router = APIRouter(prefix="/tasks", tags=["渲染任务"])
 
 
-def _get_owned_task(db: Session, task_id: str, user: User, project_id: str | None = None) -> RenderTask:
+def _get_owned_task(
+    db: Session,
+    task_id: str,
+    user: User,
+    project_id: str | None = None,
+    permission: str = PERM_PROJECT_VIEW,
+) -> RenderTask:
     task = db.get(RenderTask, task_id)
     if not task:
         raise NotFoundError("任务不存在")
     if project_id and task.project_id != project_id:
         raise NotFoundError("任务不存在")
-    # 校验项目归属
+    # 校验项目归属与权限（统一权限服务）
     if task.project_id:
-        project = db.get(Project, task.project_id)
-        if not project or project.owner_id != user.id:
-            raise NotFoundError("任务不存在")
+        get_project_access(db, task.project_id, user, permission)
     return task
 
 
@@ -46,11 +56,10 @@ def list_tasks(
         query = query.filter(RenderTask.status == status)
     if task_type:
         query = query.filter(RenderTask.task_type == task_type)
-    # 只能看到自己项目下的任务
-    owned_project_ids = [
-        p.id for p in db.query(Project).filter(Project.owner_id == current.id).all()
-    ]
-    query = query.filter(RenderTask.project_id.in_(owned_project_ids))
+    # 只能看到自己可访问项目下的任务（超管不过滤）
+    project_ids = accessible_project_ids(db, current)
+    if project_ids is not None:
+        query = query.filter(RenderTask.project_id.in_(project_ids))
     return query.order_by(RenderTask.created_at.desc()).limit(min(limit, 200)).all()
 
 
@@ -70,7 +79,7 @@ def retry_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderTask:
-    task = _get_owned_task(db, task_id, current)
+    task = _get_owned_task(db, task_id, current, permission=PERM_TASK_UPDATE)
     if task.status != "failed":
         # 也允许重试 queued/running（幂等）
         pass
@@ -120,7 +129,7 @@ def cancel_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> RenderTask:
-    task = _get_owned_task(db, task_id, current)
+    task = _get_owned_task(db, task_id, current, permission=PERM_TASK_UPDATE)
     if task.status in ("queued", "running"):
         task.status = "cancelled"
         task.message = "任务已取消"

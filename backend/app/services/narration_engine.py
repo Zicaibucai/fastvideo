@@ -30,6 +30,27 @@ from app.models.narration_beat import NarrationBeat
 from app.models.narration_run import NarrationEvidence, NarrationRun
 from app.models.render_task import RenderTask
 from app.models.storyboard_shot import StoryboardShot
+from app.services.narration_text import (
+    allocate_shot_budgets as _allocate_shot_budgets,
+    clean_one_line as _clean_one_line,
+    extract_actions as _extract_actions,
+    format_evidence as _format_evidence,
+    format_evidence_by_indexes as _format_evidence_by_indexes,
+    format_evidence_for_outline as _format_evidence_for_outline,
+    format_ref as _format_ref,
+    guess_topic as _guess_topic,
+    infer_source_sequences as _infer_source_sequences,
+    predefined_outline as _predefined_outline,
+    project_field_lines as _project_field_lines,
+    project_summary as _project_summary,
+    resegment_identity as _resegment_identity,
+    safe_extract_narration as _safe_extract_narration,
+    split_narration_beats as _split_narration_beats,
+    target_shot_count as _target_shot_count,
+)
+
+from app.services.narration_resegment import resegment_storyboard as _resegment_storyboard_impl
+
 from app.services.narration_schema import (
     ChapterDraftOutput,
     EvidenceItem,
@@ -200,45 +221,6 @@ def _build_context(
         "evidence_rows": evidence_rows,
         "evidence": _evidence_output_from_rows(evidence_rows),
     }
-
-
-def _clean_one_line(text: str | None, limit: int = 220) -> str:
-    text = re.sub(r"\s+", " ", text or "").strip()
-    return text[:limit]
-
-
-def _predefined_outline(params: dict[str, Any]) -> str:
-    outline = str(params.get("predefined_outline") or "").strip()
-    return outline[:6000] or "（未提供，由AI根据证据编排）"
-
-
-def _target_shot_count(params: dict[str, Any]) -> int:
-    return int(params.get("target_shot_count") or params.get("section_count") or 56)
-
-
-def _project_field_lines(project: Project | None) -> list[str]:
-    if not project:
-        return []
-    lines = [f"- project_name: {project.name} [项目档案]"]
-    if project.description:
-        lines.append(f"- project_description: {_clean_one_line(project.description, 180)} [项目档案]")
-    if project.bid_area:
-        suffix = f" P{project.area_source_page}" if project.area_source_page else ""
-        lines.append(f"- area_building: {project.bid_area:g}㎡ [已确认]{suffix}")
-    if project.construction_period:
-        suffix = f" P{project.period_source_page}" if project.period_source_page else ""
-        lines.append(f"- duration_total: {project.construction_period} [已确认]{suffix}")
-    if project.bidder_name:
-        suffix = f" P{project.bidder_source_page}" if project.bidder_source_page else ""
-        lines.append(f"- bidder_name: {project.bidder_name} [已确认]{suffix}")
-    if project.tech_params:
-        for name, item in list(project.tech_params.items())[:12]:
-            if isinstance(item, dict):
-                value = item.get("value") or item.get("fact_value") or item.get("text")
-                page = item.get("page") or item.get("source_page")
-                if value:
-                    lines.append(f"- {name}: {value} [项目台账]{f' P{page}' if page else ''}")
-    return lines
 
 
 def _document_excerpt_lines(db, project_id: str, *, max_lines: int = 24) -> list[str]:
@@ -661,73 +643,6 @@ JSON格式：
 }}"""
 
 
-def _format_ref(ref: SourceRef) -> str:
-    page = f"P{ref.page}" if ref.page else "P?"
-    doc = ref.documentName or ref.documentId or "未知文档"
-    quote = f" 原文: {ref.quote}" if ref.quote else ""
-    return f"{doc} {page}{quote}"
-
-
-def _format_evidence(items: list[EvidenceItem], *, limit: int = 160) -> str:
-    lines: list[str] = []
-    for idx, item in enumerate(items[:limit]):
-        params = "；".join(item.parameters) if item.parameters else "无参数"
-        actions = "；".join(item.constructionActions) if item.constructionActions else "无动作"
-        evidence_key = f" id:{item.evidenceId}" if item.evidenceId else ""
-        lines.append(
-            f"[{idx}]{evidence_key} {item.topic}｜事实：{item.fact}｜参数：{params}｜动作：{actions}｜"
-            f"工序/关系：{item.sequenceContext or '无'}｜来源：{_format_ref(item.sourceReference)}｜"
-            f"状态：{item.factCheckStatus}"
-        )
-    return "\n".join(lines)
-
-
-def _format_evidence_for_outline(items: list[EvidenceItem], *, max_per_topic: int = 8) -> str:
-    """给大纲阶段提供均衡、紧凑的证据索引，避免把数千条证据一次性喂入模型。"""
-    topic_counts: dict[str, int] = {}
-    selected: list[tuple[int, EvidenceItem]] = []
-    for index, item in enumerate(items):
-        topic = item.topic or "项目概况"
-        if topic_counts.get(topic, 0) >= max_per_topic:
-            continue
-        topic_counts[topic] = topic_counts.get(topic, 0) + 1
-        selected.append((index, item))
-
-    lines: list[str] = []
-    for index, item in selected:
-        params = _clean_one_line("；".join(item.parameters), 80) or "无"
-        actions = _clean_one_line("；".join(item.constructionActions), 60) or "无"
-        sequence = _clean_one_line(item.sequenceContext, 100) or "无"
-        source = _clean_one_line(_format_ref(item.sourceReference), 100)
-        fact = _clean_one_line(item.fact, 140)
-        evidence_key = f" id:{item.evidenceId}" if item.evidenceId else ""
-        lines.append(
-            f"[{index}]{evidence_key} {item.topic}｜事实：{fact}｜参数：{params}｜"
-            f"动作：{actions}｜工序：{sequence}｜来源：{source}"
-        )
-    return "\n".join(lines)
-
-
-def _format_evidence_by_indexes(items: list[EvidenceItem], indexes: list[int], evidence_ids: list[str] | None = None) -> str:
-    selected: list[EvidenceItem] = []
-    seen: set[int] = set()
-    id_set = set(evidence_ids or [])
-    if id_set:
-        selected.extend(item for item in items if item.evidenceId in id_set)
-    selected_keys = {item.evidenceId or str(id(item)) for item in selected}
-    for idx in indexes:
-        if 0 <= idx < len(items) and idx not in seen:
-            candidate = items[idx]
-            key = candidate.evidenceId or str(id(candidate))
-            if key not in selected_keys:
-                selected.append(candidate)
-                selected_keys.add(key)
-            seen.add(idx)
-    if not selected:
-        selected = items[:10]
-    return _format_evidence(selected, limit=80)
-
-
 def _fallback_evidence(context: dict) -> EvidenceOutput:
     """LLM 证据抽取失败时，把现有事实和摘录转为证据，保证多阶段可继续。"""
     items: list[EvidenceItem] = []
@@ -773,50 +688,6 @@ def _fallback_evidence(context: dict) -> EvidenceOutput:
     return EvidenceOutput(evidenceItems=items, rejectedFacts=[])
 
 
-def _guess_topic(text: str) -> str:
-    topic_keywords = [
-        ("工期节点", "工期|节点|进度|竣工|开工"),
-        ("平面及垂直运输", "总平面|塔吊|施工电梯|运输|堆场|道路"),
-        ("基坑土方", "基坑|土方|开挖|支护|降水"),
-        ("钢结构", "钢结构|钢梁|钢柱|吊装|焊接"),
-        ("机电", "机电|管线|暖通|给排水|电气|消防"),
-        ("BIM", "BIM|模型|碰撞|管综"),
-        ("质量安全", "质量|安全|文明施工|创优"),
-        ("绿色施工", "绿色|节能|环保|扬尘|噪声"),
-        ("总承包管理", "总承包|协调|分包|管理"),
-        ("总体部署", "部署|流水|穿插|施工段"),
-    ]
-    for topic, pattern in topic_keywords:
-        if re.search(pattern, text, flags=re.I):
-            return topic
-    return "项目概况"
-
-
-def _extract_actions(text: str) -> list[str]:
-    actions = re.findall(r"(开挖|支护|降水|浇筑|吊装|安装|焊接|穿插|运输|堆放|验收|调试|封闭|回填)", text)
-    return list(dict.fromkeys(actions))[:6]
-
-
-def _allocate_shot_budgets(outline: OutlineOutput, total_shots: int) -> list[int]:
-    chapters = outline.chapters
-    if not chapters:
-        return []
-    budgets = [1 for _ in chapters]
-    remaining = max(0, total_shots - len(chapters))
-    total_duration = sum(float(c.durationSeconds or 0) for c in chapters) or len(chapters)
-    raw = [remaining * (float(c.durationSeconds or 0) / total_duration) for c in chapters]
-    for idx, value in sorted(enumerate(raw), key=lambda pair: pair[1], reverse=True):
-        add = int(value)
-        budgets[idx] += add
-        remaining -= add
-    idx = 0
-    while remaining > 0:
-        budgets[idx % len(budgets)] += 1
-        remaining -= 1
-        idx += 1
-    return budgets
-
-
 def _merge_chapter_drafts(
     params: dict[str, Any],
     context: dict,
@@ -857,13 +728,6 @@ def _merge_chapter_drafts(
         unverifiedFacts=list(dict.fromkeys(unverified)),
         shots=shots,
     )
-
-
-def _project_summary(context: dict) -> str:
-    project = context.get("project")
-    if project and project.name:
-        return f"{project.name}施工组织推演型投标视频。"
-    return "施工组织推演型投标视频。"
 
 
 def _lint_narration_output(output: NarrationOutput) -> None:
@@ -1019,11 +883,6 @@ def _grounded_fallback_narration(shot: ShotOut, rows: list[NarrationEvidence]) -
     return "。".join(parts).rstrip("。；") + "。"
 
 
-def _split_narration_beats(text: str) -> list[str]:
-    parts = [part.strip() for part in re.split(r"(?<=[。！？；;])", text or "") if part.strip()]
-    return parts or ([text.strip()] if text and text.strip() else [])
-
-
 def _create_narration_beats(db, project_id: str, shots: list[StoryboardShot], evidence_rows: list[NarrationEvidence], cpm: int) -> int:
     db.query(NarrationBeat).filter(NarrationBeat.project_id == project_id).delete(synchronize_session=False)
     sequence = 1
@@ -1092,230 +951,14 @@ def rebuild_project_narration_beats(db, project_id: str, cpm: int = 215) -> int:
     return count
 
 
-def _resegment_identity(text: str) -> str:
-    """比较正文时忽略空白和标点，防止模型只调整断句就被误判。"""
-    return re.sub(r"[\s，。！？；：、“”‘’（）()【】《》,.!?;:…\-—_]+", "", text or "")
-
-
-def _infer_source_sequences(text: str, shots: list[StoryboardShot], cursor: int) -> tuple[list[int], int]:
-    combined = "".join(_resegment_identity(shot.narration or "") for shot in shots)
-    target = _resegment_identity(text)
-    if not target:
-        return [], cursor
-    start = combined.find(target, cursor)
-    if start < 0:
-        raise ValueError("AI 重新分镜没有保留原正文，未应用本次调整")
-    end = start + len(target)
-    ranges: list[int] = []
-    offset = 0
-    for shot in shots:
-        next_offset = offset + len(_resegment_identity(shot.narration or ""))
-        if start < next_offset and end > offset:
-            ranges.append(shot.sequence)
-        offset = next_offset
-    return ranges, end
-
-
 def resegment_storyboard(params: dict[str, Any]) -> dict[str, Any]:
-    """根据现有正文重新划分镜头，严格禁止模型新增或删改事实文本。"""
-    from app.services.ai_configuration import refresh_runtime_config_from_db
-
-    refresh_runtime_config_from_db()
-    project_id = params["project_id"]
-    db = SessionLocal()
-    try:
-        shots = (
-            db.query(StoryboardShot)
-            .filter(StoryboardShot.project_id == project_id, StoryboardShot.is_active.is_(True))
-            .order_by(StoryboardShot.sequence.asc())
-            .all()
-        )
-        if not shots:
-            raise RuntimeError("当前没有可重新分镜的正文")
-        adapter = get_llm_adapter()
-        if not adapter.is_available():
-            raise RuntimeError("LLM 服务不可用，请检查配置。")
-
-        source = [
-            {
-                "sequence": shot.sequence,
-                "title": shot.title or "",
-                "section": shot.section or "",
-                "narration": shot.narration or "",
-                "durationSeconds": float(shot.duration_seconds or 1),
-                "visualType": shot.visual_type or "generated_image",
-                "visualDescription": shot.visual_description or "",
-            }
-            for shot in shots
-        ]
-        prompt = (
-            "你是工程投标视频的分镜编辑。请只对现有解说词重新划分镜头，不要重写正文。\n"
-            f"目标镜头数量：{int(params.get('target_shot_count', len(shots)))}\n"
-            f"补充要求：{params.get('instructions') or '无'}\n\n"
-            "硬性要求：\n"
-            "1. 输出的 narration 必须逐字来自输入正文，只允许调整镜头边界和标点断句。\n"
-            "2. 不得新增、删减、改写任何事实、数字、日期、型号、工序或结论。\n"
-            "3. 每个输出镜头必须填写 sourceShotSequences，表示它由哪些原镜头组成。\n"
-            "4. 可以合并或拆分镜头；标题、章节、画面描述可以重排，但不能写入正文没有的事实。\n"
-            "5. 只输出合法 JSON，不要 Markdown 或解释。结构："
-            '{"shots":[{"sequence":1,"title":"","section":"","narration":"",'
-            '"durationSeconds":10,"visualType":"generated_image","visualDescription":"",'
-            '"sourceShotSequences":[1]}]}\n\n'
-            f"现有分镜：{json.dumps(source, ensure_ascii=False)}"
-        )
-        parsed = _complete_structured(
-            adapter,
-            prompt,
-            parse_resegment_output,
-            stage="resegment",
-            max_tokens=6000,
-            temperature=0,
-        )
-        target_shots = parsed.shots[: int(params.get("target_shot_count", len(shots)))]
-        if not target_shots:
-            raise ValueError("AI 没有返回可用分镜")
-
-        original_identity = _resegment_identity("".join(shot.narration or "" for shot in shots))
-        generated_identity = _resegment_identity("".join(shot.narration or "" for shot in target_shots))
-        if original_identity != generated_identity:
-            raise ValueError("AI 重新分镜未完整保留原正文，本次调整未应用")
-
-        old_by_sequence = {shot.sequence: shot for shot in shots}
-        cursor = 0
-        prepared: list[tuple[ResegmentShot, list[int]]] = []
-        for item in target_shots:
-            supplied = [seq for seq in item.sourceShotSequences if seq in old_by_sequence]
-            inferred, cursor = _infer_source_sequences(item.narration, shots, cursor)
-            source_sequences = supplied or inferred
-            if not source_sequences:
-                raise ValueError(f"第{item.sequence}个新分镜缺少原镜头来源")
-            prepared.append((item, list(dict.fromkeys(source_sequences))))
-
-        total_duration = sum(float(shot.duration_seconds or 0) for shot in shots)
-        if total_duration <= 0:
-            total_duration = max(1.0, sum(len(shot.narration or "") for shot in shots) / max(1, int(params.get("chars_per_minute", 215))) * 60)
-        weights = [max(1, len(_resegment_identity(item.narration))) for item, _ in prepared]
-        weight_total = sum(weights) or 1
-        result_shots: list[StoryboardShot] = []
-        used_existing_ids: set[str] = set()
-
-        def merged_metadata(source_sequences: list[int]) -> tuple[list, list, str, str, str]:
-            refs: list = []
-            scoring: list = []
-            statuses: list[str] = []
-            for sequence in source_sequences:
-                source_shot = old_by_sequence[sequence]
-                for ref in source_shot.source_references or []:
-                    if ref not in refs:
-                        refs.append(ref)
-                for score_id in source_shot.scoring_point_ids or []:
-                    if score_id not in scoring:
-                        scoring.append(score_id)
-                if source_shot.fact_check_status:
-                    statuses.append(source_shot.fact_check_status)
-            if "conflict" in statuses:
-                status = "conflict"
-            elif statuses and all(value == "verified" for value in statuses):
-                status = "verified"
-            elif statuses:
-                status = "partial"
-            else:
-                status = "unverified"
-            first = old_by_sequence[source_sequences[0]]
-            return refs, scoring, status, first.section or "", first.title or ""
-
-        for index, (item, source_sequences) in enumerate(prepared, start=1):
-            refs, scoring, status, fallback_section, fallback_title = merged_metadata(source_sequences)
-            duration = max(1.0, total_duration * weights[index - 1] / weight_total)
-            existing = next(
-                (
-                    old_by_sequence[sequence]
-                    for sequence in source_sequences
-                    if sequence in old_by_sequence and old_by_sequence[sequence].id not in used_existing_ids
-                ),
-                None,
-            )
-            if existing is None:
-                existing = next((shot for shot in shots if shot.id not in used_existing_ids), None)
-            title = item.title or fallback_title or f"第{index}段"
-            section = item.section or fallback_section
-            if existing:
-                used_existing_ids.add(existing.id)
-                old_narration = existing.narration or ""
-                if old_narration != item.narration:
-                    versions = list(existing.versions or [])
-                    revision = max([v.get("revision", 0) for v in versions] + [0]) + 1
-                    versions.append(
-                        {
-                            "revision": revision,
-                            "narration": item.narration,
-                            "visual_prompt": item.visualDescription or existing.visual_prompt,
-                            "visual_type": item.visualType,
-                            "created_at": utc_now_iso(),
-                            "source": "ai_resegment",
-                        }
-                    )
-                    existing.versions = versions
-                    from app.services.voice_service import mark_shot_narration_changed
-
-                    mark_shot_narration_changed(db, existing, old_narration, item.narration)
-                existing.sequence = index
-                existing.title = title
-                existing.section = section
-                existing.narration = item.narration
-                existing.duration_seconds = duration
-                existing.visual_type = item.visualType
-                existing.visual_description = item.visualDescription
-                existing.visual_prompt = item.visualDescription or existing.visual_prompt
-                existing.source_references = refs
-                existing.scoring_point_ids = scoring
-                existing.fact_check_status = status
-                existing.status = "edited"
-                result_shots.append(existing)
-            else:
-                created = StoryboardShot(
-                    project_id=project_id,
-                    sequence=index,
-                    title=title,
-                    section=section,
-                    narration=item.narration,
-                    duration_seconds=duration,
-                    visual_type=item.visualType,
-                    visual_description=item.visualDescription,
-                    visual_prompt=item.visualDescription,
-                    source_references=refs,
-                    scoring_point_ids=scoring,
-                    fact_check_status=status,
-                    status="ai_done",
-                    versions=[
-                        {
-                            "revision": 1,
-                            "narration": item.narration,
-                            "visual_prompt": item.visualDescription,
-                            "visual_type": item.visualType,
-                            "created_at": utc_now_iso(),
-                            "source": "ai_resegment",
-                        }
-                    ],
-                )
-                db.add(created)
-                result_shots.append(created)
-
-        for old_shot in shots:
-            if old_shot.id not in used_existing_ids:
-                db.delete(old_shot)
-        db.flush()
-        beat_count = _create_narration_beats(db, project_id, result_shots, [], int(params.get("chars_per_minute", 215)))
-        db.commit()
-        return {
-            "shot_count": len(result_shots),
-            "beat_count": beat_count,
-            "total_duration_seconds": round(sum(float(shot.duration_seconds or 0) for shot in result_shots), 1),
-            "total_narration_characters": sum(len(shot.narration or "") for shot in result_shots),
-            "status": "success",
-        }
-    finally:
-        db.close()
+    return _resegment_storyboard_impl(
+        params,
+        complete_structured=_complete_structured,
+        create_narration_beats=_create_narration_beats,
+        resegment_identity=_resegment_identity,
+        infer_source_sequences=_infer_source_sequences,
+    )
 
 
 def _quality_report(parsed: NarrationOutput, params: dict[str, Any], evidence_rows: list[NarrationEvidence], beat_count: int) -> dict[str, Any]:
@@ -1767,17 +1410,3 @@ def regenerate_single_shot(params: dict[str, Any]) -> dict[str, Any]:
         return {"shot_id": shot_id, "narration": narration, "revision": revision}
     finally:
         db.close()
-
-
-def _safe_extract_narration(raw: str) -> str:
-    """兼容 Mock 返回完整 JSON 的情况。"""
-    try:
-        parsed = parse_narration_output(raw)
-        if parsed.shots:
-            return parsed.shots[0].narration
-    except (ValueError, ValidationError):
-        pass
-    text = raw.strip().strip('"').strip("'")
-    if len(text) > 500:
-        text = text[:500]
-    return text or "解说词生成失败"

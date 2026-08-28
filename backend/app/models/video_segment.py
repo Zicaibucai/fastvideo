@@ -63,5 +63,8 @@ class VideoSegment(BaseModel):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     rendered_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # 乐观锁版本号（并发编辑保护）
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+
     video_project = relationship("VideoProject", back_populates="segments")
     storyboard_shot = relationship("StoryboardShot", lazy="selectin")

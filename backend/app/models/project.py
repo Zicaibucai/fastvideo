@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, JSON, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -41,7 +41,17 @@ class Project(BaseModel):
 
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # 协作审核策略：disabled（不启用）| recommended（建议，不阻断）| required（正式导出强制）
+    review_policy: Mapped[str] = mapped_column(
+        String(16), default="recommended", nullable=False, server_default="recommended"
+    )
+    # 乐观锁版本号：更新接口校验 base_revision，不一致返回 409
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+
     owner = relationship("User", back_populates="projects")
+    members = relationship(
+        "ProjectMember", back_populates="project", cascade="all, delete-orphan"
+    )
     source_documents = relationship(
         "SourceDocument", back_populates="project", cascade="all, delete-orphan"
     )

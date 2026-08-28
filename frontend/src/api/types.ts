@@ -147,8 +147,228 @@ export interface Project {
   doc_count: number
   shot_count: number
   asset_count: number
+  owner_id?: string
+  review_policy?: 'disabled' | 'recommended' | 'required'
+  revision?: number
+  my_role?: ProjectRole
+  my_permissions?: string[]
   created_at: string
   updated_at: string
+}
+
+// ---------- 多人协作 ----------
+export type ProjectRole =
+  | 'owner'
+  | 'bid_manager'
+  | 'technical_editor'
+  | 'media_editor'
+  | 'reviewer'
+  | 'viewer'
+
+export type ReviewState =
+  | 'draft'
+  | 'in_review'
+  | 'changes_requested'
+  | 'approved'
+  | 'approved_but_changed'
+
+export interface ProjectMember {
+  id: string
+  project_id: string
+  user_id: string
+  role: ProjectRole
+  status: 'active' | 'suspended' | 'left'
+  invited_by?: string
+  joined_at: string
+  username?: string
+  email?: string
+  full_name?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectInvitation {
+  id: string
+  project_id: string
+  email: string
+  role: ProjectRole
+  status: 'pending' | 'accepted' | 'revoked' | 'expired'
+  expires_at: string
+  invited_by?: string
+  accepted_by?: string
+  accepted_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface InvitationCreated extends ProjectInvitation {
+  invite_token: string
+  invite_url: string
+}
+
+export interface MyInvitation extends ProjectInvitation {
+  project_name?: string
+  inviter_name?: string
+}
+
+export type CollabTargetType =
+  | 'project'
+  | 'facts'
+  | 'fact'
+  | 'scoring_point'
+  | 'storyboard'
+  | 'shot'
+  | 'render_version'
+  | 'video_gen_version'
+  | 'audio_version'
+  | 'video_project'
+  | 'video_segment'
+  | 'export_task'
+
+export interface ProjectComment {
+  id: string
+  project_id: string
+  target_type: CollabTargetType
+  target_id?: string
+  target_label?: string
+  author_id: string
+  author_name?: string
+  parent_id?: string
+  body: string
+  is_blocking: boolean
+  status: 'open' | 'resolved'
+  resolved_by?: string
+  resolved_by_name?: string
+  resolved_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectWorkItem {
+  id: string
+  project_id: string
+  title: string
+  description?: string
+  target_type?: CollabTargetType
+  target_id?: string
+  target_label?: string
+  assignee_id?: string
+  assignee_name?: string
+  created_by?: string
+  created_by_name?: string
+  comment_id?: string
+  priority: 'low' | 'medium' | 'high' | 'urgent'
+  status: 'todo' | 'in_progress' | 'blocked' | 'done' | 'cancelled'
+  due_at?: string
+  completed_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ReviewDecision {
+  id: string
+  review_request_id: string
+  reviewer_id: string
+  reviewer_name?: string
+  decision: 'approved' | 'changes_requested' | 'rejected'
+  comment?: string
+  is_override: boolean
+  override_reason?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ReviewRequest {
+  id: string
+  project_id: string
+  target_type: CollabTargetType
+  target_id?: string
+  target_label?: string
+  target_revision: number
+  snapshot_hash: string
+  note?: string
+  submitted_by: string
+  submitted_by_name?: string
+  assigned_reviewer_id?: string
+  assigned_reviewer_name?: string
+  status: 'pending' | 'changes_requested' | 'approved' | 'cancelled' | 'superseded'
+  submitted_at: string
+  decided_at?: string
+  current_state?: string
+  decisions: ReviewDecision[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ReviewDetail extends ReviewRequest {
+  snapshot?: Record<string, unknown>
+  current_snapshot?: Record<string, unknown>
+}
+
+export interface ReviewTargetStatus {
+  state: ReviewState
+  changed_after_approval: boolean
+  request_id?: string
+  submitted_by?: string
+  submitted_at?: string
+}
+
+export interface ProjectReviewStatus {
+  review_policy: string
+  facts: ReviewTargetStatus
+  storyboard: ReviewTargetStatus
+  video_project?: ReviewTargetStatus
+}
+
+export interface AppNotification {
+  id: string
+  project_id?: string
+  type: string
+  title: string
+  body?: string
+  link?: string
+  actor_id?: string
+  is_read: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AuditLogEntry {
+  id: string
+  user_id?: string
+  user_name?: string
+  project_id?: string
+  action: string
+  entity_type?: string
+  entity_id?: string
+  detail?: Record<string, unknown>
+  note?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RolePermission {
+  role: ProjectRole
+  label: string
+  permissions: string[]
+}
+
+export interface CollabSummary {
+  open_comment_count: number
+  open_task_count: number
+  my_open_task_count: number
+  pending_review_count: number
+  member_count: number
+  my_role: ProjectRole
+  my_permissions: string[]
+  review_policy: string
+  recent_activity: {
+    id: string
+    action: string
+    user_name?: string
+    entity_type?: string
+    created_at?: string
+  }[]
 }
 
 export interface SourceDocument {
@@ -261,6 +481,7 @@ export interface ExtractedFact {
   confirmed_at?: string
   candidates?: FactCandidate[]
   created_at: string
+  revision?: number
 }
 
 export interface ScoringPoint {
@@ -583,6 +804,7 @@ export interface VideoProject {
   output_url?: string
   watermark_text?: string
   created_at: string
+  revision?: number
 }
 
 export interface VideoSegment {
@@ -619,6 +841,7 @@ export interface VideoSegment {
   has_subtitle: boolean
   visual_source?: string
   created_at: string
+  revision?: number
 }
 
 export interface PreflightIssue {

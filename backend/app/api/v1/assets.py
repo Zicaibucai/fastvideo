@@ -14,6 +14,27 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.services.permissions import (
+    get_project_access,
+    PERM_DOCUMENT_EDIT,
+    PERM_DOCUMENT_UPLOAD,
+    PERM_DOCUMENT_VIEW,
+    PERM_EXPORT_DEMO,
+    PERM_EXPORT_FORMAL,
+    PERM_EXPORT_VIEW,
+    PERM_FACT_EDIT,
+    PERM_FACT_VIEW,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_PROJECT_VIEW,
+    PERM_SCORING_VIEW,
+    PERM_STORYBOARD_EDIT,
+    PERM_STORYBOARD_VIEW,
+    PERM_VIDEO_EDIT,
+    PERM_VIDEO_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
 from app.core.storage import storage
@@ -31,11 +52,9 @@ router = APIRouter(prefix="/projects/{project_id}/assets", tags=["素材库"])
 logger = get_logger(__name__)
 
 
-def _get_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_project(db: Session, project_id: str, user: User, permission: str = PERM_MEDIA_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 @router.post("/ai-image", response_model=dict, status_code=202, summary="为分镜生成 AI 图片")
@@ -47,7 +66,7 @@ def generate_ai_image(
     current: User = Depends(get_current_user),
 ) -> dict:
     """兼容旧版分镜画面入口；生成的是图片素材，不是 AI 视频绑定。"""
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_EDIT)
     shot = db.get(StoryboardShot, shot_id)
     if not shot or shot.project_id != project_id or not shot.is_active:
         raise NotFoundError("分镜不存在")
@@ -74,7 +93,7 @@ def list_assets(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[Asset]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_VIEW)
     backfill_video_render_assets(db, project_id)
     query = db.query(Asset).filter(Asset.project_id == project_id)
     if asset_type:
@@ -107,7 +126,7 @@ async def upload_asset(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Asset:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_VIEW)
     original = file.filename or "素材"
     ext = Path(original).suffix.lower()
     content = await file.read()
@@ -149,7 +168,7 @@ def get_video_first_frame(
     current: User = Depends(get_current_user),
 ) -> Response:
     """返回视频素材的第一帧，作为视频工程选材时的可视化确认。"""
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_VIEW)
     asset = db.get(Asset, asset_id)
     if not asset or asset.project_id != project_id:
         raise NotFoundError("素材不存在")
@@ -201,7 +220,7 @@ def update_asset(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> Asset:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_EDIT)
     asset = db.get(Asset, asset_id)
     if not asset or asset.project_id != project_id:
         raise NotFoundError("素材不存在")
@@ -220,7 +239,7 @@ def delete_asset(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_MEDIA_EDIT)
     asset = db.get(Asset, asset_id)
     if not asset or asset.project_id != project_id:
         raise NotFoundError("素材不存在")

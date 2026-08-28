@@ -7,6 +7,29 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.services.revision import bump_revision, check_revision
+from app.services.review_service import on_target_content_changed
+from app.services.permissions import (
+    get_project_access,
+    PERM_DOCUMENT_EDIT,
+    PERM_DOCUMENT_UPLOAD,
+    PERM_DOCUMENT_VIEW,
+    PERM_EXPORT_DEMO,
+    PERM_EXPORT_FORMAL,
+    PERM_EXPORT_VIEW,
+    PERM_FACT_EDIT,
+    PERM_FACT_VIEW,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+    PERM_PROJECT_VIEW,
+    PERM_SCORING_VIEW,
+    PERM_STORYBOARD_EDIT,
+    PERM_STORYBOARD_VIEW,
+    PERM_VIDEO_EDIT,
+    PERM_VIDEO_VIEW,
+    PERM_VOICE_EDIT,
+    PERM_VOICE_VIEW,
+)
 from app.core.exceptions import NotFoundError
 from app.models.base import utc_now_iso
 from app.models.extracted_fact import ExtractedFact
@@ -111,11 +134,9 @@ def _fact_view(fact: ExtractedFact) -> tuple[str, str | None, str | None, str]:
     return label, scope, category, usage
 
 
-def _get_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
+def _get_project(db: Session, project_id: str, user: User, permission: str = PERM_FACT_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _to_out(fact: ExtractedFact, doc_names: dict[str, str] | None = None) -> ExtractedFactOut:
@@ -150,6 +171,7 @@ def _to_out(fact: ExtractedFact, doc_names: dict[str, str] | None = None) -> Ext
         confirmed_by=fact.confirmed_by,
         confirmed_at=fact.confirmed_at,
         candidates=candidates,
+        revision=fact.revision or 1,
         created_at=fact.created_at,
         updated_at=fact.updated_at,
     )
@@ -164,7 +186,7 @@ def list_facts(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[ExtractedFactOut]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_FACT_VIEW)
     query = db.query(ExtractedFact).filter(ExtractedFact.project_id == project_id)
     if status:
         query = query.filter(ExtractedFact.verification_status == status)
@@ -199,7 +221,7 @@ def list_conflicts(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> list[ExtractedFactOut]:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_FACT_VIEW)
     facts = (
         db.query(ExtractedFact)
         .filter(
@@ -232,10 +254,11 @@ def confirm_fact(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> FactConfirmResult:
-    _get_project(db, project_id, current)
+    _get_project(db, project_id, current, PERM_FACT_EDIT)
     fact = db.get(ExtractedFact, fact_id)
     if not fact or fact.project_id != project_id:
         raise NotFoundError("参数不存在")
+    check_revision(fact, payload.base_revision)
 
     # 若确认采用新值，则把同名的其它事实标记为 rejected（排除候选）
     if payload.status == "confirmed" and payload.fact_value:
@@ -276,6 +299,15 @@ def confirm_fact(
         if payload.status == "rejected":
             fact.candidates = None
 
+    bump_revision(fact)
+    db.flush()
+    # 工程信息变更：挂起的审核失效，已批准的标记为“批准后已变更”
+    on_target_content_changed(
+        db, project_id=project_id, target_type="facts", actor=current
+    )
+    on_target_content_changed(
+        db, project_id=project_id, target_type="fact", target_id=fact.id, actor=current
+    )
     db.commit()
 
     # 同步到 Project 快捷字段

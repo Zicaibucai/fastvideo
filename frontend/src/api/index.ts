@@ -175,7 +175,7 @@ export const factApi = {
     api.get<ExtractedFact[]>(`/projects/${projectId}/facts/conflicts`),
   types: (projectId: string) =>
     api.get<Record<string, string>>(`/projects/${projectId}/facts/types`).catch(() => ({ data: {} })),
-  confirm: (projectId: string, factId: string, payload: { status: string; fact_value?: string; unit?: string; note?: string }) =>
+  confirm: (projectId: string, factId: string, payload: { status: string; fact_value?: string; unit?: string; note?: string; base_revision?: number }) =>
     api.post<{ id: string; status: string; message: string }>(`/projects/${projectId}/facts/${factId}/confirm`, payload),
 }
 
@@ -687,4 +687,131 @@ export async function downloadAssetFile(asset: Pick<Asset, 'file_key' | 'url' | 
   const baseName = safeDownloadName(asset.name, '素材')
   const filename = /\.[a-z0-9]{2,8}$/i.test(baseName) ? baseName : `${baseName}${extension}`
   await downloadProtectedFile(resultUrl, filename)
+}
+
+// ---------- 多人协作 ----------
+import type {
+  AppNotification,
+  AuditLogEntry,
+  CollabSummary,
+  CollabTargetType,
+  InvitationCreated,
+  MyInvitation,
+  ProjectComment,
+  ProjectInvitation,
+  ProjectMember,
+  ProjectReviewStatus,
+  ProjectRole,
+  ProjectWorkItem,
+  ReviewDetail,
+  ReviewRequest,
+  RolePermission,
+} from './types'
+
+export const collabApi = {
+  roles: () => api.get<RolePermission[]>('/roles'),
+  // 成员
+  members: (projectId: string) => api.get<ProjectMember[]>(`/projects/${projectId}/members`),
+  updateMemberRole: (projectId: string, memberId: string, role: ProjectRole) =>
+    api.patch<ProjectMember>(`/projects/${projectId}/members/${memberId}`, { role }),
+  removeMember: (projectId: string, memberId: string, reason?: string) =>
+    api.delete(`/projects/${projectId}/members/${memberId}`, { data: { reason } }),
+  leave: (projectId: string) => api.post(`/projects/${projectId}/members/leave`),
+  transferOwnership: (projectId: string, newOwnerUserId: string, reason?: string) =>
+    api.post(`/projects/${projectId}/transfer-ownership`, {
+      new_owner_user_id: newOwnerUserId,
+      reason,
+    }),
+  // 邀请
+  invitations: (projectId: string) =>
+    api.get<ProjectInvitation[]>(`/projects/${projectId}/invitations`),
+  invite: (projectId: string, email: string, role: ProjectRole) =>
+    api.post<InvitationCreated>(`/projects/${projectId}/invitations`, { email, role }),
+  resendInvitation: (projectId: string, invitationId: string) =>
+    api.post<InvitationCreated>(`/projects/${projectId}/invitations/${invitationId}/resend`),
+  revokeInvitation: (projectId: string, invitationId: string) =>
+    api.post<ProjectInvitation>(`/projects/${projectId}/invitations/${invitationId}/revoke`),
+  myInvitations: () => api.get<MyInvitation[]>('/invitations/mine'),
+  acceptInvitation: (token: string) =>
+    api.post<ProjectMember>('/invitations/accept', { token }),
+  // 评论
+  comments: (projectId: string, params?: { target_type?: string; target_id?: string; status?: string }) =>
+    api.get<ProjectComment[]>(`/projects/${projectId}/comments`, { params }),
+  createComment: (
+    projectId: string,
+    payload: {
+      target_type: CollabTargetType
+      target_id?: string
+      parent_id?: string
+      body: string
+      is_blocking?: boolean
+    },
+  ) => api.post<ProjectComment>(`/projects/${projectId}/comments`, payload),
+  updateComment: (projectId: string, commentId: string, body: string) =>
+    api.patch<ProjectComment>(`/projects/${projectId}/comments/${commentId}`, { body }),
+  resolveComment: (projectId: string, commentId: string) =>
+    api.post<ProjectComment>(`/projects/${projectId}/comments/${commentId}/resolve`),
+  reopenComment: (projectId: string, commentId: string) =>
+    api.post<ProjectComment>(`/projects/${projectId}/comments/${commentId}/reopen`),
+  deleteComment: (projectId: string, commentId: string) =>
+    api.delete(`/projects/${projectId}/comments/${commentId}`),
+  // 待办
+  workItems: (
+    projectId: string,
+    params?: { assignee_id?: string; status?: string; priority?: string; mine?: boolean },
+  ) => api.get<ProjectWorkItem[]>(`/projects/${projectId}/work-items`, { params }),
+  createWorkItem: (
+    projectId: string,
+    payload: {
+      title: string
+      description?: string
+      target_type?: CollabTargetType
+      target_id?: string
+      assignee_id?: string
+      comment_id?: string
+      priority?: string
+      due_at?: string
+    },
+  ) => api.post<ProjectWorkItem>(`/projects/${projectId}/work-items`, payload),
+  updateWorkItem: (projectId: string, itemId: string, payload: Record<string, unknown>) =>
+    api.patch<ProjectWorkItem>(`/projects/${projectId}/work-items/${itemId}`, payload),
+  deleteWorkItem: (projectId: string, itemId: string) =>
+    api.delete(`/projects/${projectId}/work-items/${itemId}`),
+  // 审核
+  reviewStatus: (projectId: string, videoProjectId?: string) =>
+    api.get<ProjectReviewStatus>(`/projects/${projectId}/review-status`, {
+      params: videoProjectId ? { video_project_id: videoProjectId } : {},
+    }),
+  reviews: (projectId: string, params?: { status?: string; target_type?: string; mine?: boolean }) =>
+    api.get<ReviewRequest[]>(`/projects/${projectId}/reviews`, { params }),
+  submitReview: (
+    projectId: string,
+    payload: {
+      target_type: CollabTargetType
+      target_id?: string
+      note?: string
+      assigned_reviewer_id?: string
+    },
+  ) => api.post<ReviewRequest>(`/projects/${projectId}/reviews`, payload),
+  reviewDetail: (projectId: string, requestId: string) =>
+    api.get<ReviewDetail>(`/projects/${projectId}/reviews/${requestId}`),
+  decideReview: (
+    projectId: string,
+    requestId: string,
+    payload: { decision: string; comment?: string; override_reason?: string },
+  ) => api.post<ReviewRequest>(`/projects/${projectId}/reviews/${requestId}/decide`, payload),
+  cancelReview: (projectId: string, requestId: string) =>
+    api.post<ReviewRequest>(`/projects/${projectId}/reviews/${requestId}/cancel`),
+  // 审计与总览
+  auditLogs: (projectId: string, params?: { action?: string; limit?: number }) =>
+    api.get<AuditLogEntry[]>(`/projects/${projectId}/audit-logs`, { params }),
+  summary: (projectId: string) => api.get<CollabSummary>(`/projects/${projectId}/collaboration/summary`),
+}
+
+export const notificationApi = {
+  list: (params?: { unread_only?: boolean; limit?: number }) =>
+    api.get<AppNotification[]>('/notifications', { params }),
+  unreadCount: () => api.get<{ count: number }>('/notifications/unread-count'),
+  markRead: (id: string) => api.post<AppNotification>(`/notifications/${id}/read`),
+  markAllRead: () => api.post('/notifications/read-all'),
 }

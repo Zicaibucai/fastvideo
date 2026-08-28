@@ -20,6 +20,12 @@ class ProjectUpdate(BaseModel):
     code: str | None = None
     description: str | None = None
     status: str | None = None
+    review_policy: str | None = Field(
+        default=None, pattern="^(disabled|recommended|required)$"
+    )
+    base_revision: int | None = Field(
+        default=None, description="乐观锁：客户端读取时的 revision，不一致返回 409"
+    )
 
     # 关键投标参数（含来源页码）
     bid_area: float | None = None
@@ -51,6 +57,8 @@ class ProjectOut(TimestampedModel):
     tech_params: dict | None
 
     owner_id: str
+    review_policy: str = "recommended"
+    revision: int = 1
 
     # 统计
     doc_count: int = 0
@@ -59,4 +67,6 @@ class ProjectOut(TimestampedModel):
 
 
 class ProjectDetail(ProjectOut):
-    pass
+    # 当前用户在项目中的角色与权限集合（前端据此控制按钮，后端仍逐接口校验）
+    my_role: str | None = None
+    my_permissions: list[str] = []

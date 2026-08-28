@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { CSSProperties } from 'react'
 import {
   Alert,
   App,
@@ -8,7 +7,6 @@ import {
   Col,
   Collapse,
   Divider,
-  Drawer,
   Empty,
   Input,
   InputNumber,
@@ -20,7 +18,6 @@ import {
   Select,
   Space,
   Switch,
-  Tabs,
   Tag,
   Typography,
   Upload,
@@ -29,9 +26,7 @@ import {
   ArrowRightOutlined,
   CheckCircleOutlined,
   CheckOutlined,
-  ClearOutlined,
   DeleteOutlined,
-  DownloadOutlined,
   EditOutlined,
   LockOutlined,
   PlayCircleOutlined,
@@ -39,12 +34,11 @@ import {
   SafetyOutlined,
   ThunderboltOutlined,
   UnlockOutlined,
-  UploadOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import AiVideoVersionDrawer from '../components/ai-video/AiVideoVersionDrawer'
 import {
   assetApi,
-  downloadAiVideo,
   videoGenApi,
 } from '../api'
 import type {
@@ -59,7 +53,6 @@ import {
   PROVIDER_LABELS,
   RATIO_OPTIONS,
   RESOLUTION_OPTIONS,
-  TEMPLATE_PREVIEWS,
   expandRecipePrompt,
   formatImageDimensions,
   isConstructionRecipe,
@@ -68,39 +61,21 @@ import {
   parsePromptMasterPayload,
   recipeDuration,
   sanitizePromptResolution,
-  templateAssetUrl,
   templateMode,
   templatePrompt,
   templateReferenceCount,
   templateSupportsMode,
   versionDisplayName,
-  versionDownloadName,
 } from './aiVideoUtils'
 import { useAiVideoData } from '../hooks/useAiVideoData'
+import FrameSlot from '../components/ai-video/FrameSlot'
+import AiVideoTemplateLibrary from '../components/ai-video/AiVideoTemplateLibrary'
+import { modelButtonActive, modelButtonBase } from '../features/ai-video/styles'
 
 const { Title, Text, Paragraph } = Typography
 
 
 
-
-// 模型按钮样式
-const modelButtonBase: CSSProperties = {
-  padding: '7px 16px',
-  borderRadius: 8,
-  border: '1px solid #d9d9d9',
-  background: '#fff',
-  color: '#1f2937',
-  cursor: 'pointer',
-  fontSize: 13,
-  fontWeight: 500,
-  transition: 'all 0.2s',
-}
-const modelButtonActive: CSSProperties = {
-  background: '#2457A6',
-  color: '#fff',
-  borderColor: '#2457A6',
-  boxShadow: '0 2px 6px rgba(36, 87, 166, 0.16)',
-}
 
 export default function AiVideo() {
   const { projectId = '' } = useParams()
@@ -1036,349 +1011,50 @@ export default function AiVideo() {
         </div>
       </div>
 
-      {/* ============ 右侧：视频模板素材库 ============ */}
-      <div className="ai-video-library">
-        {/* 1. 标题区 */}
-        <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-          <div>
-            <Title level={4} style={{ marginBottom: 2 }}>
-              专业视频渲染引擎
-            </Title>
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              选择模板一键套用，或自定义提示词生成投标演示视频
-            </Text>
-          </div>
-          <Tag color="geekblue" style={{ fontSize: 11, marginBottom: 4 }}>
-            图生视频 · 首尾帧
-          </Tag>
-          <Button size="small" icon={<SafetyOutlined />} onClick={openAdvancedWorkbench} style={{ marginLeft: 8 }}>
-            施工配方制作
-          </Button>
-          <Button size="small" onClick={() => setDrawerOpen(true)} style={{ marginLeft: 8 }}>
-            版本中心
-          </Button>
-          <Button size="small" type="primary" icon={<UploadOutlined />} onClick={() => navigate(`/project/${projectId}/ai-video/templates/new`)} style={{ marginLeft: 8 }}>
-            从视频创建模板
-          </Button>
-        </div>
+      <AiVideoTemplateLibrary
+        projectId={projectId}
+        navigate={navigate}
+        openAdvancedWorkbench={openAdvancedWorkbench}
+        setDrawerOpen={setDrawerOpen}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        templateScopeFilter={templateScopeFilter}
+        setTemplateScopeFilter={setTemplateScopeFilter}
+        displayTemplates={displayTemplates}
+        generationMode={generationMode}
+        selectedTemplateId={selectedTemplateId}
+        handleSelectTemplate={handleSelectTemplate}
+        openTemplateApply={openTemplateApply}
+        deletingTemplateId={deletingTemplateId}
+        handleDeleteTemplate={handleDeleteTemplate}
+        templateToApply={templateToApply}
+        templateApplyOpen={templateApplyOpen}
+        setTemplateApplyOpen={setTemplateApplyOpen}
+        confirmTemplateApply={confirmTemplateApply}
+        templateApplyMode={templateApplyMode}
+        usingOriginalTemplateFrames={usingOriginalTemplateFrames}
+        originalTemplateReferenceIds={originalTemplateReferenceIds}
+        setApplyReferenceIds={setApplyReferenceIds}
+        refImages={refImages}
+        applyReferenceIds={applyReferenceIds}
+        setApplyFirstFrameId={setApplyFirstFrameId}
+        applyFirstFrameId={applyFirstFrameId}
+        setApplyLastFrameId={setApplyLastFrameId}
+        applyLastFrameId={applyLastFrameId}
+        applySubject={applySubject}
+        setApplySubject={setApplySubject}
+        applyScene={applyScene}
+        setApplyScene={setApplyScene}
+      />
 
-        {/* 2. 分类 Tab */}
-        <Tabs
-          style={{ marginTop: 4 }}
-          activeKey={activeTab}
-          onChange={setActiveTab}
-          items={[
-            {
-              key: 'exterior',
-              label: <span style={{ fontWeight: 600 }}>建筑外景运镜</span>,
-            },
-            {
-              key: 'creative',
-              label: (
-                <span style={{ fontWeight: 600 }}>
-                  首尾帧 / 多参考图·创意运镜
-                  <Tag color="volcano" style={{ fontSize: 10, lineHeight: '16px', marginInlineStart: 6 }}>
-                    NEW
-                  </Tag>
-                </span>
-              ),
-            },
-          ]}
-        />
-
-        <Space style={{ marginBottom: 12 }} wrap>
-          <Text type="secondary" style={{ fontSize: 12 }}>模板范围</Text>
-          <Segmented
-            size="small"
-            value={templateScopeFilter}
-            onChange={(value) => setTemplateScopeFilter(value as 'all' | 'personal' | 'organization')}
-            options={[
-              { label: '全部可用', value: 'all' },
-              { label: '我的模板', value: 'personal' },
-              { label: '企业模板', value: 'organization' },
-            ]}
-          />
-        </Space>
-
-        {/* 3. 模板瀑布 / 网格 */}
-        {displayTemplates.length === 0 && <Empty description="当前分类暂无模板" style={{ marginTop: 40 }} />}
-        <Row gutter={[16, 16]}>
-          {displayTemplates.map((t) => {
-            const preview = TEMPLATE_PREVIEWS[t.name] || {}
-            const isFL = (t.applicable_modes || []).includes('first_last_frame_video')
-            const isMulti = (t.applicable_modes || []).includes('multi_reference_video') || (generationMode === 'multi_reference_video' && (t.applicable_modes || []).includes('image_to_video'))
-            const selected = selectedTemplateId === t.id
-            const backendPreview = {
-              video: templateAssetUrl(t.preview_file_key) || preview.video,
-              first: templateAssetUrl(t.first_frame_file_key || t.cover_file_key) || preview.first,
-              last: templateAssetUrl(t.last_frame_file_key) || preview.last,
-            }
-            return (
-              <Col xs={24} md={12} lg={8} key={t.id}>
-                <Card
-                  hoverable
-                  onClick={() => handleSelectTemplate(t)}
-                  styles={{ body: { padding: '12px 14px', display: 'flex', flexDirection: 'column', flex: 1 } }}
-                  style={{
-                    borderRadius: 12,
-                    overflow: 'hidden',
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    border: selected ? '1.5px solid #2457A6' : '1px solid #E4E9F0',
-                    boxShadow: selected ? '0 4px 16px rgba(36, 87, 166, 0.14)' : undefined,
-                  }}
-                  cover={<TemplatePreview t={t} preview={backendPreview} isFL={isFL} />}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
-                    <Text strong style={{ fontSize: 14, flex: 1, minWidth: 0 }} ellipsis={{ tooltip: t.name }}>{t.name}</Text>
-                    {isFL && <Tag color="purple" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>首尾帧</Tag>}
-                    {isMulti && <Tag color="cyan" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>多参考图</Tag>}
-                  </div>
-                  <Paragraph
-                    type="secondary"
-                    style={{ fontSize: 12, marginTop: 6, marginBottom: 0, lineHeight: '20px', minHeight: 40, flex: 1 }}
-                    ellipsis={{ rows: 2, tooltip: t.description }}
-                  >
-                    {t.description}
-                  </Paragraph>
-                  <div style={{ marginTop: 8, flexShrink: 0 }}>
-                    {(t.category || t.prompt_recipe?.category) && <Tag color="blue" style={{ fontSize: 11 }}>{t.category || t.prompt_recipe?.category}</Tag>}
-                    {t.recommended_camera_motion && (
-                      <Tag style={{ fontSize: 11, color: '#475569' }}>{t.recommended_camera_motion}</Tag>
-                    )}
-                    <Tag style={{ fontSize: 11, color: '#475569' }}>{t.recommended_duration}s</Tag>
-                    <Tag color={t.is_system || t.scope === 'organization' ? 'blue' : 'gold'} style={{ fontSize: 11 }}>
-                      {t.is_system ? '系统模板' : t.scope === 'personal' ? '个人模板' : '企业模板'}
-                    </Tag>
-                  </div>
-                  <div style={{ minHeight: 26, marginTop: 4 }}>
-                    {(t.tags || []).slice(0, 3).map((tag) => <Tag key={tag} style={{ fontSize: 10, marginBottom: 4 }}>{tag}</Tag>)}
-                  </div>
-                  <Button
-                    type={selected ? 'primary' : 'default'}
-                    size="small"
-                    block
-                    icon={<ThunderboltOutlined />}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      openTemplateApply(t)
-                    }}
-                    style={{ marginTop: 8 }}
-                  >
-                    使用此模板
-                  </Button>
-                  {!t.is_system && (
-                    <Popconfirm
-                      title="删除这个模板？"
-                      description="删除后模板将从模板库移除，已生成的视频和历史任务不会受影响。"
-                      okText="删除"
-                      cancelText="取消"
-                      okButtonProps={{ danger: true }}
-                      onConfirm={() => void handleDeleteTemplate(t)}
-                    >
-                      <Button
-                        type="link"
-                        danger
-                        size="small"
-                        block
-                        icon={<DeleteOutlined />}
-                        loading={deletingTemplateId === t.id}
-                        onClick={(event) => event.stopPropagation()}
-                        style={{ marginTop: 4 }}
-                      >
-                        删除模板
-                      </Button>
-                    </Popconfirm>
-                  )}
-                </Card>
-              </Col>
-            )
-          })}
-        </Row>
-      </div>
-
-      <Modal
-        title={templateToApply ? `套用模板：${templateToApply.name}` : '套用模板'}
-        open={templateApplyOpen}
-        onCancel={() => setTemplateApplyOpen(false)}
-        onOk={confirmTemplateApply}
-        okText="套用模板"
-        width={680}
-      >
-        {templateToApply && (
-          <div>
-            <Text type="secondary" style={{ display: 'block', marginBottom: 14 }}>
-              多图施工模板的关键帧顺序就是动作本体。可直接使用样片关键帧复刻节奏，也可以替换为当前项目同阶段图片。
-            </Text>
-            {templateApplyMode === 'multi_reference_video' && (
-              <Alert
-                type={usingOriginalTemplateFrames ? 'success' : 'warning'}
-                showIcon
-                style={{ marginBottom: 14 }}
-                message={usingOriginalTemplateFrames ? '已带入样片原始施工关键帧（推荐）' : '当前正在使用替换图片'}
-                description={usingOriginalTemplateFrames
-                  ? `Seedance 将按 ${originalTemplateReferenceIds.length} 张关键帧的顺序理解施工节奏。`
-                  : '替换图片必须逐张对应模板中的施工阶段；只放首尾两张会退化为 AI 自由补间。'}
-                action={originalTemplateReferenceIds.length === templateReferenceCount(templateToApply)
-                  ? <Button size="small" onClick={() => setApplyReferenceIds(originalTemplateReferenceIds)}>恢复样片关键帧</Button>
-                  : undefined}
-              />
-            )}
-            <Row gutter={14}>
-              {templateApplyMode === 'multi_reference_video' ? (
-                <Col span={24}>
-                  <Text strong style={{ fontSize: 12 }}>施工关键帧（按实际发生顺序）</Text>
-                  <Select
-                    mode="multiple"
-                    maxCount={templateReferenceCount(templateToApply)}
-                    showSearch
-                    optionFilterProp="label"
-                    value={applyReferenceIds}
-                    placeholder={`按施工顺序选择 ${templateReferenceCount(templateToApply)} 张关键帧`}
-                    style={{ width: '100%', marginTop: 6 }}
-                    onChange={setApplyReferenceIds}
-                    options={refImages.map((image) => ({ label: image.name, value: image.id, image }))}
-                    optionRender={(option) => {
-                      const image = (option.data as { image?: ReferenceImage }).image
-                      return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
-                    }}
-                  />
-                </Col>
-              ) : <Col span={templateApplyMode === 'first_last_frame_video' ? 12 : 24}>
-                <Text strong style={{ fontSize: 12 }}>新的建筑首帧</Text>
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  value={applyFirstFrameId || undefined}
-                  placeholder="选择素材库中的首帧图片"
-                  style={{ width: '100%', marginTop: 6 }}
-                  onChange={setApplyFirstFrameId}
-                  options={refImages.map((image) => ({ label: image.name, value: image.id, image }))}
-                  optionRender={(option) => {
-                    const image = (option.data as { image?: ReferenceImage }).image
-                    return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
-                  }}
-                />
-              </Col>}
-              {templateApplyMode === 'first_last_frame_video' && (
-                <Col span={12}>
-                  <Text strong style={{ fontSize: 12 }}>新的建筑尾帧</Text>
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    value={applyLastFrameId || undefined}
-                    placeholder="选择素材库中的尾帧图片"
-                    style={{ width: '100%', marginTop: 6 }}
-                    onChange={setApplyLastFrameId}
-                    options={refImages.map((image) => ({ label: image.name, value: image.id, image }))}
-                    optionRender={(option) => {
-                      const image = (option.data as { image?: ReferenceImage }).image
-                      return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
-                    }}
-                  />
-                </Col>
-              )}
-            </Row>
-            <Divider style={{ margin: '18px 0 12px' }} />
-            <Row gutter={14}>
-              <Col span={12}>
-                <Text strong style={{ fontSize: 12 }}>建筑主体描述（可选）</Text>
-                <Input.TextArea
-                  rows={3}
-                  value={applySubject}
-                  onChange={(event) => setApplySubject(event.target.value)}
-                  placeholder="例如：当前项目的白色幕墙办公楼"
-                  style={{ marginTop: 6 }}
-                />
-              </Col>
-              <Col span={12}>
-                <Text strong style={{ fontSize: 12 }}>场景与环境描述（可选）</Text>
-                <Input.TextArea
-                  rows={3}
-                  value={applyScene}
-                  onChange={(event) => setApplyScene(event.target.value)}
-                  placeholder="例如：阴天，前景保留施工道路和绿化"
-                  style={{ marginTop: 6 }}
-                />
-              </Col>
-            </Row>
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginTop: 16 }}
-              message={`将自动带入：${templateToApply.recommended_duration}s · ${templateToApply.recommended_aspect_ratio} · ${templateToApply.recommended_resolution}`}
-              description="套用后仍可以在左侧编辑提示词和高级参数，再提交真实 Provider 生成。"
-            />
-          </div>
-        )}
-      </Modal>
-
-      {/* ============ 生成任务与结果（抽屉） ============ */}
-      <Drawer
-        title="视频结果版本"
-        placement="right"
-        width={440}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-      >
-        {versions.length === 0 && <Empty description="暂无结果版本" style={{ marginTop: 12 }} />}
-        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {versions.map((v) => (
-            <Card key={v.id} size="small">
-              <div style={{ position: 'relative' }}>
-                {v.result_url ? (
-                  <video
-                    src={v.result_url}
-                    style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 4, background: '#000' }}
-                    controls
-                    preload="metadata"
-                  />
-                ) : (
-                  <div style={{ width: '100%', height: 140, background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text type="secondary">V{v.version_number}</Text>
-                  </div>
-                )}
-                {v.is_selected && (
-                  <Tag color="green" style={{ position: 'absolute', top: 4, right: 4, fontSize: 10 }}>
-                    当前结果
-                  </Tag>
-                )}
-              </div>
-              <Space style={{ marginTop: 6, width: '100%', justifyContent: 'space-between' }}>
-                <Text strong style={{ fontSize: 12 }} ellipsis={{ tooltip: versionDisplayName(v) }}>
-                  {versionDisplayName(v)}
-                </Text>
-                <Text type="secondary" style={{ fontSize: 10 }}>
-                  V{v.version_number} · seed:{v.seed ?? '-'} · {PROVIDER_LABELS[v.provider] || v.provider}
-                </Text>
-              </Space>
-              {v.quality_report?.warnings?.length ? <Tag color="orange" style={{ marginTop: 4 }}>质检：{v.quality_report.warnings[0]}</Tag> : <Tag color="green" style={{ marginTop: 4 }}>质检通过</Tag>}
-              <Space style={{ marginTop: 6 }} wrap>
-                {v.result_url && (
-                  <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadAiVideo(v.result_url!, versionDownloadName(v))}>
-                    下载
-                  </Button>
-                )}
-                <Button size="small" icon={<EditOutlined />} onClick={() => openRenameVersion(v)}>
-                  重命名
-                </Button>
-                <Button
-                  size="small"
-                  type={v.is_selected ? 'default' : 'primary'}
-                  icon={<CheckOutlined />}
-                  onClick={() => handleSelectVersion(v)}
-                >
-                  设为当前
-                </Button>
-                <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteVersion(v)}>
-                  删除
-                </Button>
-              </Space>
-            </Card>
-          ))}
-        </div>
-      </Drawer>
+      <AiVideoVersionDrawer
+        drawerOpen={drawerOpen}
+        setDrawerOpen={setDrawerOpen}
+        versions={versions}
+        openRenameVersion={openRenameVersion}
+        handleSelectVersion={handleSelectVersion}
+        handleDeleteVersion={handleDeleteVersion}
+      />
 
       {/* 重命名视频版本弹窗 */}
       <Modal
@@ -1400,209 +1076,6 @@ export default function AiVideo() {
         />
       </Modal>
 
-    </div>
-  )
-}
-
-// 参考帧槽位（选择 / 上传 / 清空 / 预览）
-function FrameSlot({
-  label,
-  frame,
-  images,
-  onSelect,
-  onClear,
-  onUpload,
-}: {
-  label: string
-  frame: ReferenceImage | null
-  images: ReferenceImage[]
-  onSelect: (id: string) => void
-  onClear: () => void
-  onUpload: (file: File) => void
-}) {
-  const [previewOpen, setPreviewOpen] = useState(false)
-  return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <Text strong style={{ fontSize: 12, color: '#475569' }}>{label}</Text>
-      <div
-        style={{
-          marginTop: 6,
-          position: 'relative',
-          height: 178,
-          borderRadius: 8,
-          border: '1px dashed #d9d9d9',
-          overflow: 'hidden',
-          background: '#F8FAFC',
-        }}
-      >
-        {frame ? (
-          <>
-            <button type="button" onClick={() => setPreviewOpen(true)} style={{ width: '100%', height: '100%', padding: 0, border: 0, background: '#eef2f7', cursor: 'zoom-in' }}>
-              <img src={frame.url} alt={frame.name} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
-            </button>
-            <Button aria-label={`清除${label}`} size="small" icon={<ClearOutlined />} style={{ position: 'absolute', top: 6, right: 6 }} onClick={onClear} />
-          </>
-        ) : (
-          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>未选择{label}</Text>
-          </div>
-        )}
-      </div>
-      {frame && <div style={{ marginTop: 6, minHeight: 36 }}>
-        <Text strong ellipsis={{ tooltip: frame.name }} style={{ display: 'block', fontSize: 12 }}>{frame.name}</Text>
-        <Text type="secondary" style={{ fontSize: 11 }}>
-          {formatImageDimensions(frame.width, frame.height) && `${formatImageDimensions(frame.width, frame.height)} · `}
-          {frame.source || '素材库'}
-        </Text>
-      </div>}
-      <Space style={{ marginTop: 6, width: '100%' }}>
-        <Select
-          aria-label={`${label}素材选择`}
-          size="small"
-          style={{ flex: 1, minWidth: 0 }}
-          placeholder="选择素材"
-          value={frame?.id}
-          onChange={onSelect}
-          showSearch
-          optionFilterProp="label"
-          dropdownMatchSelectWidth={false}
-          dropdownStyle={{ minWidth: 320 }}
-          options={images.map((i) => ({ value: i.id, label: i.name, image: i }))}
-          optionRender={(option) => {
-            const image = (option.data as { image?: ReferenceImage }).image
-            const dimensions = formatImageDimensions(image?.width, image?.height)
-            return <Space style={{ width: '100%' }}><img src={image?.url} alt="" style={{ width: 52, height: 38, objectFit: 'contain', background: '#eef2f7', borderRadius: 4 }} /><span style={{ minWidth: 0 }}><Text ellipsis={{ tooltip: option.label as string }} style={{ display: 'block', maxWidth: 220 }}>{option.label}</Text>{dimensions && <Text type="secondary" style={{ fontSize: 11 }}>{dimensions}</Text>}</span></Space>
-          }}
-        />
-        <Upload
-          accept=".jpg,.jpeg,.png,.webp"
-          showUploadList={false}
-          beforeUpload={(file) => {
-            onUpload(file)
-            return false
-          }}
-        >
-          <Button size="small" icon={<UploadOutlined />}>
-            上传
-          </Button>
-        </Upload>
-      </Space>
-      <Modal open={previewOpen} title={frame?.name || label} footer={null} onCancel={() => setPreviewOpen(false)} width={760} centered>
-        {frame && <img src={frame.url} alt={frame.name} style={{ width: '100%', maxHeight: '70vh', objectFit: 'contain', background: '#f3f5f8' }} />}
-      </Modal>
-    </div>
-  )
-}
-
-// 模板卡片预览区（视频占位 + 左下角首尾帧缩略图）
-function TemplatePreview({
-  t,
-  preview,
-  isFL,
-}: {
-  t: VideoGenerationTemplate
-  preview: { video?: string; first?: string; last?: string }
-  isFL: boolean
-}) {
-  return (
-    <div
-      style={{
-        position: 'relative',
-        height: 160,
-        background: '#F0F4FA',
-        overflow: 'hidden',
-      }}
-    >
-      {preview.video ? (
-        <video
-          src={preview.video}
-          poster={preview.first}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
-          onMouseLeave={(e) => {
-            const v = e.currentTarget
-            v.pause()
-            v.currentTime = 0
-          }}
-        />
-      ) : (
-        <div
-          style={{
-            width: '100%',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            color: '#8b93a7',
-          }}
-        >
-          <PlayCircleOutlined style={{ fontSize: 36, color: '#a5b0c7' }} />
-          <Text style={{ fontSize: 12, color: '#8b93a7' }}>预览视频待补充</Text>
-          <Text style={{ fontSize: 11, color: '#a5adbd' }}>{t.recommended_camera_motion || ''}</Text>
-        </div>
-      )}
-
-      {/* 左下角首尾帧缩略图（hover 放大） */}
-      <div style={{ position: 'absolute', left: 8, bottom: 8, display: 'flex', alignItems: 'flex-end', gap: 5 }}>
-        <Thumb url={preview.first} label="首" origin="left bottom" />
-        {isFL && <ArrowRightOutlined style={{ color: '#fff', fontSize: 12, marginBottom: 9 }} />}
-        {isFL && <Thumb url={preview.last} label="尾" origin="right bottom" />}
-      </div>
-
-      {/* 时长角标 */}
-      <Tag style={{ position: 'absolute', right: 8, top: 8, fontSize: 11 }}>{t.recommended_duration}s</Tag>
-    </div>
-  )
-}
-
-function Thumb({ url, label, origin = 'left bottom' }: { url?: string; label: string; origin?: string }) {
-  const [hover, setHover] = useState(false)
-  return url ? (
-    <div
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: 6,
-        border: '2px solid #fff',
-        boxShadow: hover ? '0 6px 20px rgba(0,0,0,0.45)' : '0 1px 4px rgba(0,0,0,0.2)',
-        overflow: 'hidden',
-        position: 'relative',
-        zIndex: hover ? 10 : 1,
-        transform: hover ? 'scale(2.4)' : 'scale(1)',
-        transformOrigin: origin,
-        transition: 'transform .18s ease, boxShadow .18s ease',
-        cursor: 'zoom-in',
-        flexShrink: 0,
-      }}
-    >
-      <img src={url} alt={label} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-    </div>
-  ) : (
-    <div
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: 6,
-        border: '2px solid #fff',
-        background: 'rgba(30, 41, 59, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#fff',
-        fontSize: 11,
-        fontWeight: 600,
-        flexShrink: 0,
-      }}
-    >
-      {label}
     </div>
   )
 }

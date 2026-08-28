@@ -12,7 +12,6 @@ from __future__ import annotations
 import time
 import threading
 import uuid
-import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, or_
@@ -27,7 +26,19 @@ from app.adapters.factory import (
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.services.permissions import (
+    get_project_access,
+    PERM_MEDIA_EDIT,
+    PERM_MEDIA_VIEW,
+)
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.api.v1.video_gen_support import (
+    draft_to_out,
+    job_to_out,
+    prompt_master_mock_allowed,
+    template_to_out,
+    version_to_out,
+)
 from app.core.logging import get_logger
 from app.models.asset import Asset
 from app.models.project import Project
@@ -89,99 +100,13 @@ router = APIRouter(prefix="/projects/{project_id}/ai-video", tags=["AI 视频生
 logger = get_logger(__name__)
 
 
-def _prompt_master_mock_allowed() -> bool:
-    """读取启动配置，并兼容测试/本地演示在导入后设置的环境变量。"""
-    if settings.ai_prompt_master_allow_mock:
-        return True
-    return os.getenv("AI_PROMPT_MASTER_ALLOW_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
-
+_prompt_master_mock_allowed = prompt_master_mock_allowed
 
 # ---------------- 辅助 ----------------
 
-def _get_owned_project(db: Session, project_id: str, user: User) -> Project:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
-    return project
-
-
-def _job_to_out(job: VideoGenerationJob) -> VideoGenerationJobOut:
-    result_url = None
-    if job.result_asset_id:
-        asset = job.result_asset
-        if asset and asset.file_key:
-            result_url = f"/files/{asset.file_key}"
-    return VideoGenerationJobOut(
-        id=job.id,
-        project_id=job.project_id,
-        generation_mode=job.generation_mode,
-        first_frame_asset_id=job.first_frame_asset_id,
-        last_frame_asset_id=job.last_frame_asset_id,
-        reference_asset_ids=list(job.reference_asset_ids or []),
-        template_id=job.template_id,
-        positive_prompt=job.positive_prompt,
-        negative_prompt=job.negative_prompt,
-        architecture_constraints=job.architecture_constraints,
-        constraints_enabled=job.constraints_enabled,
-        provider=job.provider,
-        model_name=job.model_name,
-        duration=job.duration,
-        aspect_ratio=job.aspect_ratio,
-        resolution=job.resolution,
-        seed=job.seed,
-        generate_audio=job.generate_audio,
-        watermark=job.watermark,
-        provider_task_id=job.provider_task_id,
-        status=job.status,
-        progress=job.progress,
-        error_message=job.error_message,
-        elapsed_seconds=job.elapsed_seconds,
-        result_asset_id=job.result_asset_id,
-        asset_status=(
-            "ready" if job.result_asset_id
-            else "failed" if job.status == "failed"
-            else "processing"
-        ),
-        result_url=result_url,
-        quality_report=(job.result_asset.meta or {}).get("quality_report") if job.result_asset else None,
-        parameter_snapshot=job.parameter_snapshot,
-        created_by=job.created_by,
-        started_at=job.started_at,
-        completed_at=job.completed_at,
-        created_at=job.created_at.isoformat() if job.created_at else None,
-        version_count=len(job.versions),
-    )
-
-
-def _version_to_out(version: VideoGenerationVersion) -> VideoGenerationVersionOut:
-    result_url = None
-    if version.result_asset_id and version.result_asset and version.result_asset.file_key:
-        result_url = f"/files/{version.result_asset.file_key}"
-    return VideoGenerationVersionOut(
-        id=version.id,
-        video_job_id=version.video_job_id,
-        result_asset_id=version.result_asset_id,
-        name=version.result_asset.name if version.result_asset else None,
-        result_url=result_url,
-        version_number=version.version_number,
-        provider=version.provider,
-        model_name=version.model_name,
-        seed=version.seed,
-        generation_mode=version.generation_mode,
-        prompt_snapshot=version.prompt_snapshot,
-        negative_prompt_snapshot=version.negative_prompt_snapshot,
-        parameter_snapshot=version.parameter_snapshot,
-        first_frame_asset_id=version.first_frame_asset_id,
-        last_frame_asset_id=version.last_frame_asset_id,
-        reference_asset_ids=list(version.reference_asset_ids or []),
-        quality_report=(version.result_asset.meta or {}).get("quality_report") if version.result_asset else None,
-        template_id=version.template_id,
-        is_selected=version.is_selected,
-        selected_by=version.selected_by,
-        selected_at=version.selected_at,
-        is_deleted=version.is_deleted,
-        created_at=version.created_at.isoformat() if version.created_at else None,
-    )
+def _get_owned_project(db: Session, project_id: str, user: User, permission: str = PERM_MEDIA_VIEW) -> Project:
+    """统一项目访问：成员校验 + 细粒度权限（非成员 404，权限不足 403）。"""
+    return get_project_access(db, project_id, user, permission).project
 
 
 def _run_video_job_background(job_id: str) -> None:
@@ -225,93 +150,6 @@ def _dispatch_video_job(db: Session, job: VideoGenerationJob) -> None:
         _start_video_job_thread(job.id)
 
 
-def _template_out(t: VideoGenerationTemplate) -> VideoGenerationTemplateOut:
-    return VideoGenerationTemplateOut(
-        id=t.id,
-        name=t.name,
-        description=t.description,
-        applicable_modes=t.applicable_modes,
-        default_positive_prompt=t.default_positive_prompt,
-        default_negative_prompt=t.default_negative_prompt,
-        recommended_duration=t.recommended_duration,
-        recommended_aspect_ratio=t.recommended_aspect_ratio,
-        recommended_resolution=t.recommended_resolution,
-        recommended_camera_motion=t.recommended_camera_motion,
-        default_arch_constraints=t.default_arch_constraints,
-        is_system=t.is_system,
-        is_enabled=t.is_enabled,
-        created_by=t.created_by,
-        sort_order=t.sort_order,
-        source_template_id=t.source_template_id,
-        category=t.category,
-        tags=t.tags,
-        prompt_recipe=t.prompt_recipe,
-        preview_asset_id=t.preview_asset_id,
-        cover_asset_id=t.cover_asset_id,
-        preview_file_key=t.preview_asset.file_key if t.preview_asset else None,
-        cover_file_key=t.cover_asset.file_key if t.cover_asset else None,
-        scope=t.scope,
-        status=t.status,
-        source_video_asset_id=t.source_video_asset_id,
-        clip_start_seconds=t.clip_start_seconds,
-        clip_end_seconds=t.clip_end_seconds,
-        first_frame_asset_id=t.first_frame_asset_id,
-        middle_frame_asset_id=t.middle_frame_asset_id,
-        last_frame_asset_id=t.last_frame_asset_id,
-        first_frame_file_key=t.first_frame_asset.file_key if t.first_frame_asset else None,
-        middle_frame_file_key=t.middle_frame_asset.file_key if t.middle_frame_asset else None,
-        last_frame_file_key=t.last_frame_asset.file_key if t.last_frame_asset else None,
-        reference_frame_asset_ids=list(t.reference_frame_asset_ids or []),
-        reference_frame_times=[float(value) for value in (t.reference_frame_times or [])],
-        reference_frame_count=t.reference_frame_count,
-        source_license_confirmed=t.source_license_confirmed,
-        created_at=t.created_at,
-        updated_at=t.updated_at,
-    )
-
-
-def _draft_out(db: Session, draft: VideoTemplateDraft) -> VideoTemplateDraftOut:
-    source = draft.source_video_asset
-    first = draft.first_frame_asset
-    middle = draft.middle_frame_asset
-    last = draft.last_frame_asset
-    preview = draft.preview_asset
-    reference_assets = [db.get(Asset, asset_id) for asset_id in (draft.reference_frame_asset_ids or [])]
-    return VideoTemplateDraftOut(
-        id=draft.id,
-        project_id=draft.project_id,
-        source_video_asset_id=draft.source_video_asset_id,
-        source_video_name=source.name if source else None,
-        source_video_file_key=source.file_key if source else None,
-        source_video_duration_seconds=source.duration_seconds if source else None,
-        name=draft.name,
-        description=draft.description,
-        status=draft.status,
-        clip_start_seconds=draft.clip_start_seconds,
-        clip_end_seconds=draft.clip_end_seconds,
-        middle_seconds=draft.middle_seconds,
-        first_frame_asset_id=draft.first_frame_asset_id,
-        middle_frame_asset_id=draft.middle_frame_asset_id,
-        last_frame_asset_id=draft.last_frame_asset_id,
-        first_frame_file_key=first.file_key if first else None,
-        middle_frame_file_key=middle.file_key if middle else None,
-        last_frame_file_key=last.file_key if last else None,
-        reference_frame_asset_ids=list(draft.reference_frame_asset_ids or []),
-        reference_frame_times=[float(value) for value in (draft.reference_frame_times or [])],
-        reference_frame_file_keys=[asset.file_key for asset in reference_assets if asset and asset.file_key],
-        prompt_recipe=draft.prompt_recipe,
-        analysis_warnings=draft.analysis_warnings,
-        intent=draft.intent,
-        preview_job_id=draft.preview_job_id,
-        preview_asset_id=draft.preview_asset_id,
-        preview_file_key=preview.file_key if preview else None,
-        template_id=draft.template_id,
-        source_license_confirmed=draft.source_license_confirmed,
-        created_at=draft.created_at,
-        updated_at=draft.updated_at,
-    )
-
-
 def _refresh_draft_preview_status(db: Session, draft: VideoTemplateDraft) -> None:
     if not draft.preview_job_id:
         return
@@ -340,7 +178,7 @@ def list_templates(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     query = db.query(VideoGenerationTemplate).filter(VideoGenerationTemplate.is_enabled.is_(True))
     if scope == "personal":
         query = query.filter(
@@ -378,7 +216,7 @@ def list_templates(
             t for t in templates
             if t.applicable_modes and (mode in (t.applicable_modes or []) or (mode == "multi_reference_video" and "image_to_video" in (t.applicable_modes or [])))
         ]
-    return [_template_out(t) for t in templates]
+    return [template_to_out(t) for t in templates]
 
 
 @router.get("/templates/{template_id}", response_model=VideoGenerationTemplateOut, summary="模板详情")
@@ -388,11 +226,11 @@ def get_template(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     t = db.get(VideoGenerationTemplate, template_id)
     if not t or not t.is_enabled:
         raise NotFoundError("模板不存在")
-    return _template_out(t)
+    return template_to_out(t)
 
 
 @router.post("/templates", response_model=VideoGenerationTemplateOut, status_code=201, summary="创建企业模板")
@@ -402,7 +240,7 @@ def create_template(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     t = VideoGenerationTemplate(
         name=payload.name,
         description=payload.description,
@@ -432,7 +270,7 @@ def create_template(
     db.add(t)
     db.commit()
     db.refresh(t)
-    return _template_out(t)
+    return template_to_out(t)
 
 
 @router.patch("/templates/{template_id}", response_model=VideoGenerationTemplateOut, summary="更新模板")
@@ -443,7 +281,7 @@ def update_template(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     t = db.get(VideoGenerationTemplate, template_id)
     if not t:
         raise NotFoundError("模板不存在")
@@ -456,7 +294,7 @@ def update_template(
         setattr(t, field, value)
     db.commit()
     db.refresh(t)
-    return _template_out(t)
+    return template_to_out(t)
 
 
 @router.delete("/templates/{template_id}", status_code=204, summary="删除模板")
@@ -466,7 +304,7 @@ def delete_template(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     t = db.get(VideoGenerationTemplate, template_id)
     if not t:
         raise NotFoundError("模板不存在")
@@ -496,7 +334,7 @@ def create_template_draft(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     source = db.get(Asset, payload.source_video_asset_id)
     if not source or source.project_id != project_id or source.asset_type != "video":
         raise NotFoundError("模板来源视频不存在")
@@ -517,7 +355,7 @@ def create_template_draft(
     db.add(draft)
     db.commit()
     db.refresh(draft)
-    return _draft_out(db, draft)
+    return draft_to_out(db, draft)
 
 
 @router.get("/template-drafts", response_model=list[VideoTemplateDraftOut], summary="模板草稿列表")
@@ -526,7 +364,7 @@ def list_template_drafts(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     drafts = (
         db.query(VideoTemplateDraft)
         .filter(
@@ -537,7 +375,7 @@ def list_template_drafts(
         .limit(20)
         .all()
     )
-    return [_draft_out(db, draft) for draft in drafts]
+    return [draft_to_out(db, draft) for draft in drafts]
 
 
 @router.get("/template-drafts/{draft_id}", response_model=VideoTemplateDraftOut, summary="模板草稿详情")
@@ -547,10 +385,10 @@ def get_template_draft(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     draft = _get_owned_template_draft(db, project_id, draft_id)
     _refresh_draft_preview_status(db, draft)
-    return _draft_out(db, draft)
+    return draft_to_out(db, draft)
 
 
 @router.post("/template-drafts/{draft_id}/clip", response_model=VideoTemplateDraftOut, summary="截取模板镜头并提取关键帧")
@@ -561,7 +399,7 @@ def clip_template_draft(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     draft = _get_owned_template_draft(db, project_id, draft_id)
     try:
         extract_template_frames(
@@ -573,7 +411,7 @@ def clip_template_draft(
         )
     except (ValueError, RuntimeError) as exc:
         raise ConflictError(str(exc)) from exc
-    return _draft_out(db, draft)
+    return draft_to_out(db, draft)
 
 
 @router.post("/template-drafts/{draft_id}/analyze", response_model=VideoTemplateDraftOut, summary="AI 提炼模板配方")
@@ -584,7 +422,7 @@ def analyze_template_draft(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     draft = _get_owned_template_draft(db, project_id, draft_id)
     if not draft.first_frame_asset_id:
         raise ConflictError("请先截取镜头并提取首帧")
@@ -663,7 +501,7 @@ def analyze_template_draft(
     draft.status = "analyzed"
     db.commit()
     db.refresh(draft)
-    return _draft_out(db, draft)
+    return draft_to_out(db, draft)
 
 
 @router.patch("/template-drafts/{draft_id}/recipe", response_model=VideoTemplateDraftOut, summary="修改模板配方")
@@ -674,7 +512,7 @@ def update_template_draft_recipe(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     draft = _get_owned_template_draft(db, project_id, draft_id)
     if payload.name is not None:
         draft.name = payload.name.strip()
@@ -684,7 +522,7 @@ def update_template_draft_recipe(
     draft.status = "analyzed"
     db.commit()
     db.refresh(draft)
-    return _draft_out(db, draft)
+    return draft_to_out(db, draft)
 
 
 @router.post("/template-drafts/{draft_id}/preview", response_model=VideoGenerationJobOut, status_code=202, summary="试生成模板视频")
@@ -695,7 +533,7 @@ def preview_template_draft(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     draft = _get_owned_template_draft(db, project_id, draft_id)
     recipe = normalize_construction_recipe(draft.prompt_recipe) or {}
     prompt = str(recipe.get("prompt") or "").strip()
@@ -780,7 +618,7 @@ def preview_template_draft(
     db.commit()
     _dispatch_video_job(db, job)
     db.refresh(job)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 @router.post("/template-drafts/{draft_id}/publish", response_model=VideoGenerationTemplateOut, status_code=201, summary="发布视频模板")
@@ -791,7 +629,7 @@ def publish_template_draft(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     draft = _get_owned_template_draft(db, project_id, draft_id)
     _refresh_draft_preview_status(db, draft)
     preview_job = db.get(VideoGenerationJob, draft.preview_job_id) if draft.preview_job_id else None
@@ -875,7 +713,7 @@ def publish_template_draft(
     draft.status = "published"
     db.commit()
     db.refresh(template)
-    return _template_out(template)
+    return template_to_out(template)
 
 
 # ============================================================
@@ -916,7 +754,7 @@ def list_reference_images(
 ):
     """返回项目素材库中的图片素材（上传/模型截图/渲染图/AI 图），
     由用户主动选择作为首帧/尾帧，禁止系统自动挑选。"""
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     assets = (
         db.query(Asset)
         .filter(Asset.project_id == project_id, Asset.asset_type == "image")
@@ -965,7 +803,7 @@ def compile_prompt(
     current: User = Depends(get_current_user),
 ):
     """返回与实际视频任务完全相同的 Seedance 提示词编译结果。"""
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     recipe = payload.prompt_recipe
     arch_constraints: list[str] | None = None
     if payload.template_id:
@@ -1006,7 +844,7 @@ def prompt_master(
 
     LLM 未配置 Key 或不可用时自动返回确定性演示提示词，保证流程可运行。
     """
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     ids = [i for i in (payload.first_frame_asset_id, payload.last_frame_asset_id) if i]
     ids += payload.reference_asset_ids or []
     if not [i for i in ids if i]:
@@ -1036,7 +874,7 @@ def create_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> VideoGenerationJob:
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
 
     # 幂等键
     if payload.idempotency_key:
@@ -1049,7 +887,7 @@ def create_task(
             .first()
         )
         if existing:
-            return _job_to_out(existing)
+            return job_to_out(existing)
 
     # 用户必须明确选择首帧
     first_asset = db.get(Asset, payload.first_frame_asset_id)
@@ -1180,13 +1018,13 @@ def create_task(
         )
         if not existing:
             raise
-        return _job_to_out(existing)
+        return job_to_out(existing)
     except ValueError as exc:
         raise ConflictError(str(exc))
 
     _dispatch_video_job(db, job)
     db.refresh(job)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 @router.get("/tasks", response_model=list[VideoGenerationJobOut], summary="任务列表")
@@ -1196,12 +1034,12 @@ def list_tasks(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     query = db.query(VideoGenerationJob).filter(VideoGenerationJob.project_id == project_id)
     if status:
         query = query.filter(VideoGenerationJob.status == status)
     jobs = query.order_by(VideoGenerationJob.created_at.desc()).limit(100).all()
-    return [_job_to_out(j) for j in jobs]
+    return [job_to_out(j) for j in jobs]
 
 
 @router.get("/tasks/{job_id}", response_model=VideoGenerationJobOut, summary="任务详情（轮询）")
@@ -1211,11 +1049,11 @@ def get_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     job = db.get(VideoGenerationJob, job_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("视频生成任务不存在")
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 @router.post("/tasks/{job_id}/retry", response_model=VideoGenerationJobOut, summary="重试失败任务")
@@ -1225,7 +1063,7 @@ def retry_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     job = db.get(VideoGenerationJob, job_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("视频生成任务不存在")
@@ -1238,7 +1076,7 @@ def retry_task(
     db.commit()
     _dispatch_video_job(db, job)
     db.refresh(job)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 @router.post("/tasks/{job_id}/regenerate", response_model=VideoGenerationJobOut, status_code=202, summary="基于当前版本重新生成")
@@ -1249,7 +1087,7 @@ def regenerate_task(
     current: User = Depends(get_current_user),
 ):
     """成功任务也可重新生成；新任务共享 variant_group_id，版本中心可横向比较。"""
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     source = db.get(VideoGenerationJob, job_id)
     if not source or source.project_id != project_id:
         raise NotFoundError("视频生成任务不存在")
@@ -1282,7 +1120,7 @@ def regenerate_task(
         raise ConflictError(str(exc))
     _dispatch_video_job(db, job)
     db.refresh(job)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 @router.post("/tasks/{job_id}/cancel", response_model=VideoGenerationJobOut, summary="取消任务")
@@ -1292,7 +1130,7 @@ def cancel_task(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     job = db.get(VideoGenerationJob, job_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("视频生成任务不存在")
@@ -1309,7 +1147,7 @@ def cancel_task(
         job.error_message = None
         db.commit()
     db.refresh(job)
-    return _job_to_out(job)
+    return job_to_out(job)
 
 
 @router.get("/tasks/{job_id}/versions", response_model=list[VideoGenerationVersionOut], summary="任务结果版本")
@@ -1319,7 +1157,7 @@ def task_versions(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     job = db.get(VideoGenerationJob, job_id)
     if not job or job.project_id != project_id:
         raise NotFoundError("视频生成任务不存在")
@@ -1332,7 +1170,7 @@ def task_versions(
         .order_by(VideoGenerationVersion.version_number.asc())
         .all()
     )
-    return [_version_to_out(v) for v in versions]
+    return [version_to_out(v) for v in versions]
 
 
 # ============================================================
@@ -1345,7 +1183,7 @@ def list_versions(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_VIEW)
     query = db.query(VideoGenerationVersion).filter(VideoGenerationVersion.is_deleted.is_(False))
     job_ids = (
         db.query(VideoGenerationJob.id)
@@ -1357,7 +1195,7 @@ def list_versions(
         return []
     query = query.filter(VideoGenerationVersion.video_job_id.in_(job_ids))
     versions = query.order_by(VideoGenerationVersion.created_at.desc()).limit(200).all()
-    return [_version_to_out(v) for v in versions]
+    return [version_to_out(v) for v in versions]
 
 
 @router.patch("/versions/{version_id}", response_model=VideoGenerationVersionOut, summary="重命名视频版本")
@@ -1368,7 +1206,7 @@ def rename_version(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     version = db.get(VideoGenerationVersion, version_id)
     if not version or version.is_deleted:
         raise NotFoundError("视频版本不存在")
@@ -1384,7 +1222,7 @@ def rename_version(
     asset.name = name
     db.commit()
     db.refresh(version)
-    return _version_to_out(version)
+    return version_to_out(version)
 
 
 @router.post("/versions/{version_id}/select", response_model=VideoGenerationVersionOut, summary="选为当前结果")
@@ -1394,12 +1232,12 @@ def select_result(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     try:
         version = select_version(db, project_id, version_id, current.username)
     except RuntimeError as exc:
         raise ConflictError(str(exc))
-    return _version_to_out(version)
+    return version_to_out(version)
 
 
 @router.delete("/versions/{version_id}", status_code=204, summary="删除版本（软删除）")
@@ -1409,7 +1247,7 @@ def delete_version(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
-    _get_owned_project(db, project_id, current)
+    _get_owned_project(db, project_id, current, PERM_MEDIA_EDIT)
     try:
         soft_delete_version(db, project_id, version_id, current.username)
     except RuntimeError as exc:

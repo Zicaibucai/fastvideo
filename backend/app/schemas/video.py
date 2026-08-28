@@ -98,6 +98,7 @@ class VideoProjectUpdate(BaseModel):
     open_config: OpenConfig | None = None
     close_config: CloseConfig | None = None
     timeline: list[TimelineItemIn] | None = None
+    base_revision: int | None = Field(default=None, description="乐观锁版本，不一致返回 409")
 
 
 class VideoProjectOut(TimestampedModel):
@@ -125,6 +126,7 @@ class VideoProjectOut(TimestampedModel):
 # ============================================================
 # 视频分段
 # ============================================================
+    revision: int = 1
 
 class VideoSegmentOut(TimestampedModel):
     video_project_id: str
@@ -159,7 +161,7 @@ class VideoSegmentOut(TimestampedModel):
     has_audio: bool = False
     has_subtitle: bool = False
     visual_source: str | None = None  # manual | video | image | model_shot | placeholder | none
-
+    revision: int = 1
 
 class VideoSegmentPatch(BaseModel):
     duration: float | None = None
@@ -173,6 +175,8 @@ class VideoSegmentPatch(BaseModel):
     visual_asset_id: str | None = None
     audio_version_id: str | None = None
     sequence: int | None = None
+    base_revision: int | None = Field(default=None, description="乐观锁版本，不一致返回 409")
+
 
 
 class SegmentsReorderIn(BaseModel):
@@ -204,6 +208,8 @@ class PreflightOut(BaseModel):
     segment_count: int
     rendered_segment_count: int
     missing_render_count: int
+    review_policy: str = "recommended"
+    mock_mode: bool = False
 
 
 class ExportStartOut(BaseModel):

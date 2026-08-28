@@ -20,6 +20,8 @@ const AiVideo = lazy(() => import('./pages/AiVideo'))
 const VideoTemplateCreator = lazy(() => import('./pages/VideoTemplateCreator'))
 const ConstructionWorkbenchPage = lazy(() => import('./pages/ConstructionWorkbenchPage'))
 const AccountSettings = lazy(() => import('./pages/AccountSettings'))
+const Collaboration = lazy(() => import('./pages/Collaboration'))
+const AcceptInvite = lazy(() => import('./pages/AcceptInvite'))
 
 function PageFallback() {
   return (
@@ -93,6 +95,8 @@ export default function App() {
             <Route path="/project/:projectId/ai-video/advanced" element={<ConstructionWorkbenchPage />} />
             <Route path="/project/:projectId/ai-video/templates/new" element={<VideoTemplateCreator />} />
             <Route path="/project/:projectId/video" element={<Video />} />
+            <Route path="/project/:projectId/collaboration" element={<Collaboration />} />
+            <Route path="/invite/accept" element={<AcceptInvite />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

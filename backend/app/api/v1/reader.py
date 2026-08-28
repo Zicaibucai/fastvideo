@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.exceptions import NotFoundError
 from app.models.document_page import DocumentPage
+from app.services.permissions import get_project_access, PERM_DOCUMENT_VIEW
 from app.models.project import Project
 from app.models.source_document import SourceDocument
 from app.models.storyboard_shot import StoryboardShot
@@ -19,9 +20,7 @@ router = APIRouter(prefix="/projects/{project_id}/reader", tags=["文档阅读�
 
 
 def _get_owned_doc(db: Session, project_id: str, doc_id: str, user: User) -> SourceDocument:
-    project = db.get(Project, project_id)
-    if not project or project.owner_id != user.id:
-        raise NotFoundError("项目不存在")
+    get_project_access(db, project_id, user, PERM_DOCUMENT_VIEW)
     doc = db.get(SourceDocument, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError("资料不存在")
