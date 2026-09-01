@@ -160,32 +160,14 @@ app = FastAPI(
     openapi_url=f"{settings.api_v1_prefix}/openapi.json",
 )
 
-# CORS
+# 允许任意来源访问 API。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.backend_cors_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.middleware("http")
-async def same_origin_guard(request, call_next):
-    """Reject cross-origin state-changing cookie requests.
-
-    Browser sessions authenticate via an HttpOnly cookie.  SameSite=Lax is a
-    useful baseline, while this explicit Origin check also protects requests
-    initiated by same-site subdomains or permissive browser integrations.
-    Bearer-token API clients without a cookie are unaffected.
-    """
-    if request.method not in {"GET", "HEAD", "OPTIONS"} and request.cookies.get("fastvideo_access"):
-        origin = request.headers.get("origin")
-        if origin and origin not in settings.backend_cors_origins:
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(status_code=403, content={"message": "请求来源不受信任"})
-    return await call_next(request)
 
 # 统一异常处理
 register_exception_handlers(app)

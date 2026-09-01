@@ -1136,6 +1136,9 @@ def generate_prompt_master(
         generation_mode=generation_mode,
         intent=intent,
     )
+    # 模型常把 recommended_duration 返回成「8-12秒」这类范围文本，
+    # 而响应模型要求整数秒，这里统一归一化，避免序列化时校验失败。
+    raw_recommended_duration = structured.get("recommended_duration")
     return {
         "prompt": prompt,
         "name": generated_name[:128],
@@ -1147,6 +1150,10 @@ def generate_prompt_master(
         "model": (getattr(adapter, "config", {}) or {}).get("model"),
         "vision_used": vision_used and not is_mock,
         "warnings": warnings,
-        "recommended_duration": structured.get("recommended_duration"),
+        "recommended_duration": (
+            normalize_video_duration(raw_recommended_duration)
+            if raw_recommended_duration is not None
+            else None
+        ),
         "recipe": recipe,
     }

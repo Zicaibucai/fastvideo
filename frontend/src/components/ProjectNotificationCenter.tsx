@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   exportApi,
   factApi,
+  notificationApi,
   renderApi,
   taskApi,
   videoGenApi,
@@ -14,6 +15,7 @@ import {
 import type {
   ExportTask,
   ExtractedFact,
+  AppNotification,
   RenderJobTask,
   RenderTask,
   VideoGenerationJob,
@@ -34,10 +36,8 @@ const ProjectNoticeContext = createContext<ProjectNoticeContextValue | null>(nul
 
 export function ProjectNotificationProvider({
   children,
-  projectId,
 }: {
   children: ReactNode
-  projectId: string | null
 }) {
   const [manualNotices, setManualNotices] = useState<Record<string, NoticeItem>>({})
 
@@ -244,6 +244,14 @@ function noticeTone(status: string): NoticeTone {
   return 'info'
 }
 
+function appNotificationTone(type: string): NoticeTone {
+  const normalized = type.toLowerCase()
+  if (normalized.includes('fail') || normalized.includes('error')) return 'error'
+  if (normalized.includes('accept') || normalized.includes('complete')) return 'success'
+  if (normalized.includes('review') || normalized.includes('approve')) return 'warning'
+  return 'info'
+}
+
 function noticeTitle(task: ProjectTaskNotice) {
   const normalized = task.status.toLowerCase()
   if (isFailed(normalized)) return normalized === 'cancelled' || normalized === 'canceled' ? `${task.label}已取消` : `${task.label}失败`
@@ -296,14 +304,66 @@ function latestGenericTasks(tasks: RenderTask[]) {
   return [...latest.values()]
 }
 
-export default function ProjectNotificationCenter({ projectId }: { projectId: string }) {
+export default function ProjectNotificationCenter({ projectId }: { projectId: string | null }) {
   const navigate = useNavigate()
   const { notices: manualNotices } = useProjectNotifications()
+  const [appNotifications, setAppNotifications] = useState<AppNotification[]>([])
   const [taskNotices, setTaskNotices] = useState<ProjectTaskNotice[]>([])
   const [factCounts, setFactCounts] = useState({ conflict: 0, unverified: 0 })
   const [retryingKey, setRetryingKey] = useState<string | null>(null)
 
+  const refreshAppNotifications = useCallback(async () => {
+    if (document.visibilityState !== 'visible') return
+    try {
+      const response = await notificationApi.list({ limit: 20 })
+      setAppNotifications(response.data)
+    } catch {
+      // 通知中心不能影响页面主流程，接口暂时不可用时保留上次结果。
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshAppNotifications()
+    const timer = window.setInterval(() => void refreshAppNotifications(), 30000)
+    const refresh = () => void refreshAppNotifications()
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [refreshAppNotifications])
+
+  const openAppNotification = useCallback(async (item: AppNotification) => {
+    if (!item.is_read) {
+      setAppNotifications((current) => current.map((candidate) => (
+        candidate.id === item.id ? { ...candidate, is_read: true } : candidate
+      )))
+      try {
+        await notificationApi.markRead(item.id)
+      } catch {
+        setAppNotifications((current) => current.map((candidate) => (
+          candidate.id === item.id ? { ...candidate, is_read: false } : candidate
+        )))
+      }
+    }
+    if (item.link) navigate(item.link)
+  }, [navigate])
+
+  const markAllAppNotificationsRead = useCallback(async () => {
+    setAppNotifications((current) => current.map((item) => ({ ...item, is_read: true })))
+    try {
+      await notificationApi.markAllRead()
+    } catch {
+      await refreshAppNotifications()
+    }
+  }, [refreshAppNotifications])
+
   const fetchTasks = useCallback(async () => {
+    if (!projectId) {
+      setTaskNotices([])
+      setFactCounts({ conflict: 0, unverified: 0 })
+      return
+    }
     const results = await Promise.allSettled([
       taskApi.list({ project_id: projectId }),
       videoGenApi.listTasks(projectId),
@@ -362,6 +422,16 @@ export default function ProjectNotificationCenter({ projectId }: { projectId: st
     }
   }, [fetchTasks])
 
+  const appItems = useMemo<NoticeItem[]>(() => appNotifications.map((item) => ({
+    key: `app:${item.id}`,
+    tone: appNotificationTone(item.type),
+    title: item.title,
+    description: item.body,
+    read: item.is_read,
+    createdAt: item.created_at,
+    onOpen: () => openAppNotification(item),
+  })), [appNotifications, openAppNotification])
+
   const items = useMemo<NoticeItem[]>(() => {
     const factItems: NoticeItem[] = []
 
@@ -399,6 +469,7 @@ export default function ProjectNotificationCenter({ projectId }: { projectId: st
       title: noticeTitle(task),
       description: <Text type="secondary">{noticeDescription(task)}</Text>,
       progress: isActive(task.status) && typeof task.progress === 'number' ? task.progress : undefined,
+      createdAt: task.updatedAt || task.createdAt,
       action: (
         <span className="notice-center-actions">
           <Button size="small" onClick={() => navigate(task.route)}>进入查看</Button>
@@ -436,8 +507,8 @@ export default function ProjectNotificationCenter({ projectId }: { projectId: st
       ),
     }))
 
-    return [...manualNotices, ...factItems, ...taskItems]
-  }, [factCounts, fetchTasks, manualNotices, navigate, projectId, retryingKey, taskNotices])
+    return [...appItems, ...manualNotices, ...factItems, ...taskItems]
+  }, [appItems, factCounts, fetchTasks, manualNotices, navigate, projectId, retryingKey, taskNotices])
 
-  return <FloatingNoticeCenter items={items} />
+  return <FloatingNoticeCenter items={items} onMarkAllRead={markAllAppNotificationsRead} />
 }

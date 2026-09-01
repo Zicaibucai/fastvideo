@@ -1159,6 +1159,29 @@ button:active,
   background: var(--page-bg);
 }
 
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 64px;
+  padding: 0 32px;
+  line-height: normal;
+  background: var(--surface) !important;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+}
+
 .app-content {
   min-width: 0;
   padding: 28px 32px 40px !important;
@@ -1781,10 +1804,8 @@ button:active,
 
 /* 页面通知中心 */
 .notice-center-fab {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 45;
+  position: relative;
+  z-index: 1;
 }
 
 .notice-center-trigger.ant-btn {
@@ -1849,6 +1870,13 @@ button:active,
   border-bottom: 1px solid var(--border);
 }
 
+.notice-center-header-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .notice-center-header .ant-typography-secondary {
   font-size: 12px;
 }
@@ -1868,6 +1896,23 @@ button:active,
   gap: 10px;
   padding: 15px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.notice-center-item:not(.notice-center-item-read) {
+  background: var(--brand-soft);
+}
+
+.notice-center-item-interactive {
+  cursor: pointer;
+}
+
+.notice-center-item-interactive:hover {
+  background: #e4edfc;
+}
+
+.notice-center-item-interactive:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
 }
 
 .notice-center-item:last-child {
@@ -3007,16 +3052,16 @@ button:active,
     padding: 20px 16px 28px !important;
   }
 
-  .notice-center-fab {
-    right: 18px;
-    bottom: 18px;
+  .app-topbar {
+    height: 56px;
+    padding: 0 16px;
   }
 
-    .notice-center-trigger.ant-btn {
-      width: 42px;
-      height: 42px;
-      font-size: 16px;
-    }
+  .notice-center-trigger.ant-btn {
+    width: 42px;
+    height: 42px;
+    font-size: 16px;
+  }
 
   .page-header {
     flex-direction: column;

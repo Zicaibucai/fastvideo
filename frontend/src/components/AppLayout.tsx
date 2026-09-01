@@ -24,10 +24,9 @@ import { projectApi } from '../api'
 import type { Project } from '../api/types'
 import { rememberProjectOpened } from '../recentProjects'
 import ProjectNotificationCenter, { ProjectNotificationProvider } from './ProjectNotificationCenter'
-import NotificationBell from './NotificationBell'
 import { ProjectAccessProvider } from '../hooks/useProjectPermissions'
 
-const { Sider, Content } = Layout
+const { Sider, Header, Content } = Layout
 
 /** 某个项目下的全部工作区页面（渲染为二级菜单项） */
 function projectWorkspaceItems(projectId: string): NonNullable<MenuProps['items']> {
@@ -192,26 +191,24 @@ export default function AppLayout() {
         />
       </Sider>
       <Layout className="app-main-layout">
-        <Content className="app-content" style={{ padding: '28px 32px 40px' }}>
-          <div className="app-content-inner">
-            <ProjectNotificationProvider
-              key={urlProjectId || 'global'}
-              projectId={urlProjectId}
-            >
-              <div style={{ position: 'fixed', top: 12, right: 20, zIndex: 100 }}>
-                <NotificationBell />
-              </div>
+        <ProjectNotificationProvider key={urlProjectId || 'global'}>
+          <Header className="app-topbar">
+            <div className="app-topbar-inner">
+              <ProjectNotificationCenter projectId={urlProjectId} />
+            </div>
+          </Header>
+          <Content className="app-content" style={{ padding: '28px 32px 40px' }}>
+            <div className="app-content-inner">
               {urlProjectId ? (
                 <ProjectAccessProvider key={urlProjectId} projectId={urlProjectId}>
                   <Outlet />
-                  <ProjectNotificationCenter projectId={urlProjectId} />
                 </ProjectAccessProvider>
               ) : (
                 <Outlet />
               )}
-            </ProjectNotificationProvider>
-          </div>
-        </Content>
+            </div>
+          </Content>
+        </ProjectNotificationProvider>
       </Layout>
     </Layout>
   )
