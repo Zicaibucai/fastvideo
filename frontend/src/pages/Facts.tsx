@@ -276,27 +276,6 @@ export default function Facts() {
       ),
     },
     {
-      title: '置信度与用途',
-      width: 180,
-      render: (_: unknown, fact: ExtractedFact) => {
-        const usage = usageFor(fact)
-        return (
-          <Space direction="vertical" size={4}>
-            <Text>{Math.round((fact.confidence || 0) * 100)}%</Text>
-            <Tag color={usage.color}>{usage.label}</Tag>
-          </Space>
-        )
-      },
-    },
-    {
-      title: '核对状态',
-      width: 120,
-      render: (_: unknown, fact: ExtractedFact) => {
-        const status = STATUS_LABEL[fact.verification_status] || STATUS_LABEL.unverified
-        return <Tag color={status.color}>{status.label}</Tag>
-      },
-    },
-    {
       title: '操作',
       width: 180,
       render: (_: unknown, fact: ExtractedFact) => (
@@ -324,6 +303,27 @@ export default function Facts() {
           )}
         </Space>
       ),
+    },
+    {
+      title: '置信度与用途',
+      width: 180,
+      render: (_: unknown, fact: ExtractedFact) => {
+        const usage = usageFor(fact)
+        return (
+          <Space direction="vertical" size={4}>
+            <Text>{Math.round((fact.confidence || 0) * 100)}%</Text>
+            <Tag color={usage.color}>{usage.label}</Tag>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '核对状态',
+      width: 120,
+      render: (_: unknown, fact: ExtractedFact) => {
+        const status = STATUS_LABEL[fact.verification_status] || STATUS_LABEL.unverified
+        return <Tag color={status.color}>{status.label}</Tag>
+      },
     },
   ]
 

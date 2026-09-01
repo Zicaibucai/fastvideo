@@ -26,7 +26,7 @@ import { rememberProjectOpened } from '../recentProjects'
 import ProjectNotificationCenter, { ProjectNotificationProvider } from './ProjectNotificationCenter'
 import { ProjectAccessProvider } from '../hooks/useProjectPermissions'
 
-const { Sider, Header, Content } = Layout
+const { Sider, Content } = Layout
 
 /** 某个项目下的全部工作区页面（渲染为二级菜单项） */
 function projectWorkspaceItems(projectId: string): NonNullable<MenuProps['items']> {
@@ -192,11 +192,9 @@ export default function AppLayout() {
       </Sider>
       <Layout className="app-main-layout">
         <ProjectNotificationProvider key={urlProjectId || 'global'}>
-          <Header className="app-topbar">
-            <div className="app-topbar-inner">
-              <ProjectNotificationCenter projectId={urlProjectId} />
-            </div>
-          </Header>
+          <div className="app-notice-fab">
+            <ProjectNotificationCenter projectId={urlProjectId} />
+          </div>
           <Content className="app-content" style={{ padding: '28px 32px 40px' }}>
             <div className="app-content-inner">
               {urlProjectId ? (

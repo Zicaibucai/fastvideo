@@ -320,7 +320,8 @@ export const voiceApi = {
   subtitles: (projectId: string, shotId: string, versionId?: string) =>
     api.get<{ shot_id: string; version_id: string; version_number: number; subtitle_data: SubtitleSegment[]; audio_url?: string; duration_seconds?: number }>(
       `/projects/${projectId}/storyboard/${shotId}/subtitles`,
-      { params: versionId ? { version_id: versionId } : {} },
+      // 分镜还没有正式配音版本是常态（尚未生成），不应每次选中都弹错误提示。
+      { params: versionId ? { version_id: versionId } : {}, skipErrorToast: true },
     ),
   updateSubtitles: (projectId: string, shotId: string, segments: { sequence: number; start_ms: number; end_ms: number }[]) =>
     api.patch(`/projects/${projectId}/storyboard/${shotId}/subtitles`, { segments }),

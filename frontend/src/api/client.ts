@@ -1,6 +1,13 @@
 import axios from 'axios'
 import { Modal, message } from 'antd'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** 预期内的失败（如分镜还没有配音版本）不弹全局错误提示。 */
+    skipErrorToast?: boolean
+  }
+}
+
 type ValidationErrorItem = {
   loc?: Array<string | number>
   msg?: string
@@ -42,7 +49,7 @@ api.interceptors.response.use(
         cancelText: '保留我的编辑',
         onOk: () => window.location.reload(),
       })
-    } else {
+    } else if (!error.config?.skipErrorToast) {
       message.error(msg)
     }
     return Promise.reject(error)

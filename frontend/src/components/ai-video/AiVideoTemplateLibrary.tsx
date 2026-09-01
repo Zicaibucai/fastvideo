@@ -1,11 +1,11 @@
-import { Alert, Button, Card, Col, Divider, Empty, Input, Modal, Popconfirm, Row, Segmented, Select, Space, Tabs, Tag, Typography } from 'antd'
-import { DeleteOutlined, SafetyOutlined, ThunderboltOutlined, UploadOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Input, Modal, Popconfirm, Segmented, Select, Space, Tabs, Tag, Typography } from 'antd'
+import { CheckCircleFilled, DeleteOutlined, SafetyOutlined, ThunderboltOutlined, UploadOutlined } from '@ant-design/icons'
 import { CollabEntry } from '../collab/CollabEntry'
 import TemplatePreview from './TemplatePreview'
 import type { ReferenceImage, VideoGenerationTemplate } from '../../api/types'
 import { TEMPLATE_PREVIEWS, templateAssetUrl, templateReferenceCount } from '../../pages/aiVideoUtils'
 
-const { Title, Text, Paragraph } = Typography
+const { Title, Text } = Typography
 
 export interface AiVideoTemplateLibraryProps {
   [key: string]: any
@@ -30,60 +30,49 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
       {/* ============ 右侧：视频模板素材库 ============ */}
       <div className="ai-video-library">
         {/* 1. 标题区 */}
-        <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-          <div>
-            <Title level={4} style={{ marginBottom: 2 }}>
-              专业视频渲染引擎
-            </Title>
+        <div className="av-lib-header">
+          <div style={{ minWidth: 0 }}>
+            <div className="av-lib-eyebrow">AI VIDEO STUDIO</div>
+            <Title level={3} className="av-lib-title">专业视频渲染引擎</Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
               选择模板一键套用，或自定义提示词生成投标演示视频
             </Text>
-            <div style={{ marginTop: 4 }}>
-              {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
-            </div>
           </div>
-          <Tag color="geekblue" style={{ fontSize: 11, marginBottom: 4 }}>
-            图生视频 · 首尾帧
-          </Tag>
-          <Button size="small" icon={<SafetyOutlined />} onClick={openAdvancedWorkbench} style={{ marginLeft: 8 }}>
-            施工配方制作
-          </Button>
-          <Button size="small" onClick={() => setDrawerOpen(true)} style={{ marginLeft: 8 }}>
-            版本中心
-          </Button>
-          <Button size="small" type="primary" icon={<UploadOutlined />} onClick={() => navigate(`/project/${projectId}/ai-video/templates/new`)} style={{ marginLeft: 8 }}>
-            从视频创建模板
-          </Button>
+          <div className="av-lib-actions">
+            {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
+            <Button icon={<SafetyOutlined />} onClick={openAdvancedWorkbench}>高级提示词工程</Button>
+            <Button onClick={() => setDrawerOpen(true)}>生成历史</Button>
+            <Button type="primary" icon={<UploadOutlined />} onClick={() => navigate(`/project/${projectId}/ai-video/templates/new`)}>从视频创建模板</Button>
+          </div>
         </div>
 
-        {/* 2. 分类 Tab */}
-        <Tabs
-          style={{ marginTop: 4 }}
-          activeKey={activeTab}
-          onChange={setActiveTab}
-          items={[
-            {
-              key: 'exterior',
-              label: <span style={{ fontWeight: 600 }}>建筑外景运镜</span>,
-            },
-            {
-              key: 'creative',
-              label: (
-                <span style={{ fontWeight: 600 }}>
-                  首尾帧 / 多参考图·创意运镜
-                  <Tag color="volcano" style={{ fontSize: 10, lineHeight: '16px', marginInlineStart: 6 }}>
-                    NEW
-                  </Tag>
-                </span>
-              ),
-            },
-          ]}
-        />
-
-        <Space style={{ marginBottom: 12 }} wrap>
-          <Text type="secondary" style={{ fontSize: 12 }}>模板范围</Text>
+        {/* 2. 分类与范围 */}
+        <div className="av-lib-toolbar">
+          <Tabs
+            className="av-lib-tabs"
+            activeKey={activeTab}
+            onChange={setActiveTab}
+            items={[
+              {
+                key: 'exterior',
+                label: <span style={{ fontWeight: 600 }}>建筑外景运镜</span>,
+              },
+              {
+                key: 'creative',
+                label: (
+                  <span style={{ fontWeight: 600 }}>
+                    首尾帧 / 多参考图·创意运镜
+                    <Tag color="volcano" style={{ fontSize: 10, lineHeight: '16px', marginInlineStart: 6 }}>
+                      NEW
+                    </Tag>
+                  </span>
+                ),
+              },
+            ]}
+          />
           <Segmented
             size="small"
+            className="av-lib-scope"
             value={templateScopeFilter}
             onChange={(value) => setTemplateScopeFilter(value as 'all' | 'personal' | 'organization')}
             options={[
@@ -92,104 +81,85 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
               { label: '企业模板', value: 'organization' },
             ]}
           />
-        </Space>
+        </div>
 
-        {/* 3. 模板瀑布 / 网格 */}
-        {displayTemplates.length === 0 && <Empty description="当前分类暂无模板" style={{ marginTop: 40 }} />}
-        <Row gutter={[16, 16]}>
-          {templateList.map((t) => {
-            const preview = TEMPLATE_PREVIEWS[t.name] || {}
-            const isFL = (t.applicable_modes || []).includes('first_last_frame_video')
-            const isMulti = (t.applicable_modes || []).includes('multi_reference_video') || (generationMode === 'multi_reference_video' && (t.applicable_modes || []).includes('image_to_video'))
-            const selected = selectedTemplateId === t.id
-            const backendPreview = {
-              video: templateAssetUrl(t.preview_file_key) || preview.video,
-              first: templateAssetUrl(t.first_frame_file_key || t.cover_file_key) || preview.first,
-              last: templateAssetUrl(t.last_frame_file_key) || preview.last,
-            }
-            return (
-              <Col xs={24} md={12} lg={8} key={t.id}>
-                <Card
-                  hoverable
+        {/* 3. 模板网格 */}
+        <div className="av-lib-scroll">
+          {displayTemplates.length === 0 && <Empty description="当前分类暂无模板" style={{ marginTop: 60 }} />}
+          <div className="av-tpl-grid">
+            {templateList.map((t) => {
+              const preview = TEMPLATE_PREVIEWS[t.name] || {}
+              const isFL = (t.applicable_modes || []).includes('first_last_frame_video')
+              const isMulti = (t.applicable_modes || []).includes('multi_reference_video') || (generationMode === 'multi_reference_video' && (t.applicable_modes || []).includes('image_to_video'))
+              const selected = selectedTemplateId === t.id
+              const backendPreview = {
+                video: templateAssetUrl(t.preview_file_key) || preview.video,
+                first: templateAssetUrl(t.first_frame_file_key || t.cover_file_key) || preview.first,
+                last: templateAssetUrl(t.last_frame_file_key) || preview.last,
+              }
+              return (
+                <div
+                  key={t.id}
+                  className={`av-tpl-card${selected ? ' is-selected' : ''}`}
                   onClick={() => handleSelectTemplate(t)}
-                  styles={{ body: { padding: '12px 14px', display: 'flex', flexDirection: 'column', flex: 1 } }}
-                  style={{
-                    borderRadius: 12,
-                    overflow: 'hidden',
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    border: selected ? '1.5px solid #2457A6' : '1px solid #E4E9F0',
-                    boxShadow: selected ? '0 4px 16px rgba(36, 87, 166, 0.14)' : undefined,
-                  }}
-                  cover={<TemplatePreview t={t} preview={backendPreview} isFL={isFL} />}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
-                    <Text strong style={{ fontSize: 14, flex: 1, minWidth: 0 }} ellipsis={{ tooltip: t.name }}>{t.name}</Text>
-                    {isFL && <Tag color="purple" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>首尾帧</Tag>}
-                    {isMulti && <Tag color="cyan" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>多参考图</Tag>}
-                  </div>
-                  <Paragraph
-                    type="secondary"
-                    style={{ fontSize: 12, marginTop: 6, marginBottom: 0, lineHeight: '20px', minHeight: 40, flex: 1 }}
-                    ellipsis={{ rows: 2, tooltip: t.description }}
-                  >
-                    {t.description}
-                  </Paragraph>
-                  <div style={{ marginTop: 8, flexShrink: 0 }}>
-                    {(t.category || t.prompt_recipe?.category) && <Tag color="blue" style={{ fontSize: 11 }}>{t.category || t.prompt_recipe?.category}</Tag>}
-                    {t.recommended_camera_motion && (
-                      <Tag style={{ fontSize: 11, color: '#475569' }}>{t.recommended_camera_motion}</Tag>
-                    )}
-                    <Tag style={{ fontSize: 11, color: '#475569' }}>{t.recommended_duration}s</Tag>
-                    <Tag color={t.is_system || t.scope === 'organization' ? 'blue' : 'gold'} style={{ fontSize: 11 }}>
-                      {t.is_system ? '系统模板' : t.scope === 'personal' ? '个人模板' : '企业模板'}
-                    </Tag>
-                  </div>
-                  <div style={{ minHeight: 26, marginTop: 4 }}>
-                    {(t.tags || []).slice(0, 3).map((tag) => <Tag key={tag} style={{ fontSize: 10, marginBottom: 4 }}>{tag}</Tag>)}
-                  </div>
-                  <Button
-                    type={selected ? 'primary' : 'default'}
-                    size="small"
-                    block
-                    icon={<ThunderboltOutlined />}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      openTemplateApply(t)
-                    }}
-                    style={{ marginTop: 8 }}
-                  >
-                    使用此模板
-                  </Button>
-                  {!t.is_system && (
-                    <Popconfirm
-                      title="删除这个模板？"
-                      description="删除后模板将从模板库移除，已生成的视频和历史任务不会受影响。"
-                      okText="删除"
-                      cancelText="取消"
-                      okButtonProps={{ danger: true }}
-                      onConfirm={() => void handleDeleteTemplate(t)}
-                    >
+                  {selected && <span className="av-tpl-check"><CheckCircleFilled /></span>}
+                  <TemplatePreview t={t} preview={backendPreview} isFL={isFL} />
+                  <div className="av-tpl-body">
+                    <div className="av-tpl-topline">
+                      <span className="av-tpl-name" title={t.name}>{t.name}</span>
+                      {isFL && <Tag color="purple" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>首尾帧</Tag>}
+                      {isMulti && <Tag color="cyan" style={{ fontSize: 10, marginInlineEnd: 0, flexShrink: 0 }}>多参考图</Tag>}
+                    </div>
+                    <p className="av-tpl-desc" title={t.description || ''}>{t.description}</p>
+                    <div className="av-tpl-meta">
+                      {(t.category || t.prompt_recipe?.category) && <span className="av-tpl-chip">{t.category || t.prompt_recipe?.category}</span>}
+                      {t.recommended_camera_motion && <span className="av-tpl-chip">{t.recommended_camera_motion}</span>}
+                      <span className="av-tpl-chip">{t.recommended_duration}s</span>
+                      <span className="av-tpl-chip is-scope">
+                        {t.is_system ? '系统模板' : t.scope === 'personal' ? '个人模板' : '企业模板'}
+                      </span>
+                      {(t.tags || []).slice(0, 2).map((tag) => <span key={tag} className="av-tpl-chip">{tag}</span>)}
+                    </div>
+                    <div className="av-tpl-foot">
                       <Button
-                        type="link"
-                        danger
+                        className="av-tpl-use"
+                        type={selected ? 'primary' : 'default'}
                         size="small"
-                        block
-                        icon={<DeleteOutlined />}
-                        loading={deletingTemplateId === t.id}
-                        onClick={(event) => event.stopPropagation()}
-                        style={{ marginTop: 4 }}
+                        icon={<ThunderboltOutlined />}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          openTemplateApply(t)
+                        }}
                       >
-                        删除模板
+                        使用此模板
                       </Button>
-                    </Popconfirm>
-                  )}
-                </Card>
-              </Col>
-            )
-          })}
-        </Row>
+                      {!t.is_system && (
+                        <Popconfirm
+                          title="删除这个模板？"
+                          description="删除后模板将从模板库移除，已生成的视频和历史任务不会受影响。"
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => void handleDeleteTemplate(t)}
+                        >
+                          <Button
+                            className="av-tpl-delete"
+                            danger
+                            size="small"
+                            icon={<DeleteOutlined />}
+                            loading={deletingTemplateId === t.id}
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        </Popconfirm>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </div>
 
       <Modal
@@ -219,9 +189,9 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
                   : undefined}
               />
             )}
-            <Row gutter={14}>
+            <div style={{ display: 'grid', gridTemplateColumns: templateApplyMode === 'first_last_frame_video' ? '1fr 1fr' : '1fr', gap: 14 }}>
               {templateApplyMode === 'multi_reference_video' ? (
-                <Col span={24}>
+                <div>
                   <Text strong style={{ fontSize: 12 }}>施工关键帧（按实际发生顺序）</Text>
                   <Select
                     mode="multiple"
@@ -238,25 +208,27 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
                       return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
                     }}
                   />
-                </Col>
-              ) : <Col span={templateApplyMode === 'first_last_frame_video' ? 12 : 24}>
-                <Text strong style={{ fontSize: 12 }}>新的建筑首帧</Text>
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  value={applyFirstFrameId || undefined}
-                  placeholder="选择素材库中的首帧图片"
-                  style={{ width: '100%', marginTop: 6 }}
-                  onChange={setApplyFirstFrameId}
-                  options={referenceImages.map((image) => ({ label: image.name, value: image.id, image }))}
-                  optionRender={(option) => {
-                    const image = (option.data as { image?: ReferenceImage }).image
-                    return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
-                  }}
-                />
-              </Col>}
+                </div>
+              ) : (
+                <div>
+                  <Text strong style={{ fontSize: 12 }}>新的建筑首帧</Text>
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    value={applyFirstFrameId || undefined}
+                    placeholder="选择素材库中的首帧图片"
+                    style={{ width: '100%', marginTop: 6 }}
+                    onChange={setApplyFirstFrameId}
+                    options={referenceImages.map((image) => ({ label: image.name, value: image.id, image }))}
+                    optionRender={(option) => {
+                      const image = (option.data as { image?: ReferenceImage }).image
+                      return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
+                    }}
+                  />
+                </div>
+              )}
               {templateApplyMode === 'first_last_frame_video' && (
-                <Col span={12}>
+                <div>
                   <Text strong style={{ fontSize: 12 }}>新的建筑尾帧</Text>
                   <Select
                     showSearch
@@ -271,12 +243,12 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
                       return <Space><img src={image?.url} alt="" style={{ width: 44, height: 32, objectFit: 'cover', borderRadius: 4 }} /><span>{option.label}</span></Space>
                     }}
                   />
-                </Col>
+                </div>
               )}
-            </Row>
-            <Divider style={{ margin: '18px 0 12px' }} />
-            <Row gutter={14}>
-              <Col span={12}>
+            </div>
+            <div style={{ height: 1, background: '#eef1f6', margin: '18px 0 14px' }} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div>
                 <Text strong style={{ fontSize: 12 }}>建筑主体描述（可选）</Text>
                 <Input.TextArea
                   rows={3}
@@ -285,8 +257,8 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
                   placeholder="例如：当前项目的白色幕墙办公楼"
                   style={{ marginTop: 6 }}
                 />
-              </Col>
-              <Col span={12}>
+              </div>
+              <div>
                 <Text strong style={{ fontSize: 12 }}>场景与环境描述（可选）</Text>
                 <Input.TextArea
                   rows={3}
@@ -295,8 +267,8 @@ export default function AiVideoTemplateLibrary(props: AiVideoTemplateLibraryProp
                   placeholder="例如：阴天，前景保留施工道路和绿化"
                   style={{ marginTop: 6 }}
                 />
-              </Col>
-            </Row>
+              </div>
+            </div>
             <Alert
               type="info"
               showIcon

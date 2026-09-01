@@ -5,24 +5,22 @@ import {
   Space,
   Button,
   Dropdown,
-  List,
   Tag,
-  Empty,
   Form,
   Input,
   Select,
   InputNumber,
   Slider,
-  Switch,
   Upload,
   App,
   Modal,
   Tooltip,
   Row,
   Col,
-  Divider,
 } from 'antd'
 import {
+  AppstoreOutlined,
+  HistoryOutlined,
   UploadOutlined,
   PictureOutlined,
   ReloadOutlined,
@@ -30,6 +28,7 @@ import {
   EditOutlined,
   PlayCircleOutlined,
   MoreOutlined,
+  SlidersOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { CollabEntry } from '../components/collab/CollabEntry'
@@ -245,158 +244,180 @@ export default function RenderWorkspace() {
 
   return (
     <div>
-      <div className="page-header workspace-page-header">
-        <div className="page-heading">
-          <Title level={3} style={{ marginBottom: 6 }}>
-            画面制作
-          </Title>
-          <Text type="secondary" className="page-description">
-          原始模型/BIM → AI 渲染 → 素材版本管理
+      <div className="rw-page-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="rw-eyebrow">RENDER STUDIO</div>
+          <Title level={3} className="rw-title">画面制作</Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            原始模型/BIM → AI 渲染 → 素材版本管理
           </Text>
-          <div style={{ marginTop: 8 }}>
-            {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
-          </div>
         </div>
+        {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
       </div>
 
       <Card className="workspace-shell render-workspace-shell">
         <div className="workspace-split-layout">
           {/* 左侧：独立源图素材库 */}
           <div className="workspace-sidebar render-sidebar">
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <Text strong>源图素材库</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>这里只管理 BIM / 模型截图，不关联分镜。</Text>
-              <List
-                size="small"
-                dataSource={modelSourceImages}
-                renderItem={(s) => (
-                  <List.Item
-                    className={`workspace-list-item ${selectedSource === s.id ? 'is-selected' : ''}`}
+            <div className="rw-side-head">
+              <span className="rw-section-icon"><PictureOutlined /></span>
+              <span className="rw-side-title">源图素材库</span>
+              <span className="rw-side-count">{modelSourceImages.length} 张</span>
+            </div>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 11.5 }}>
+              这里只管理 BIM / 模型截图，不关联分镜。
+            </Text>
+            {modelSourceImages.length === 0 ? (
+              <div className="rw-empty">
+                <span className="rw-empty-icon"><PictureOutlined /></span>
+                <span className="rw-empty-title">暂无源图</span>
+                <span className="rw-empty-hint">请在右侧上传 BIM / 模型截图</span>
+              </div>
+            ) : (
+              <div className="rw-src-list">
+                {modelSourceImages.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`rw-src-card${selectedSource === s.id ? ' is-selected' : ''}`}
                     onClick={() => handleSelectSource(s.id)}
                   >
-                    <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                      <Space>
-                        <b style={{ fontSize: 13 }}>{s.name}</b>
-                      </Space>
-                      <Space size={4}>
-                        <Tag color="blue" style={{ fontSize: 11 }}>{s.camera_angle || '未标注角度'}</Tag>
-                        <Text type="secondary" style={{ fontSize: 11 }}>{s.width}×{s.height}</Text>
-                      </Space>
-                    </Space>
-                  </List.Item>
-                )}
-                locale={{ emptyText: '暂无源图，请先上传 BIM/模型截图' }}
-              />
-            </Space>
+                    <div className="rw-src-thumb">
+                      {s.url ? <img src={s.url} alt={s.name} /> : <PictureOutlined />}
+                    </div>
+                    <div className="rw-src-body">
+                      <span className="rw-src-name" title={s.name}>{s.name}</span>
+                      <span className="rw-src-meta">{s.camera_angle || '未标注角度'} · {s.width}×{s.height}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 中间：预览 */}
           <div className="workspace-main render-workspace-main">
-            <div className="workspace-panel-heading">
-              <div>
-                <Text strong>原图 / 结果对比</Text>
-                <Text type="secondary">渲染结果独立保存在素材库，视频工程后续按需选用</Text>
+            <div className="rw-section">
+              <div className="rw-section-head">
+                <span className="rw-section-icon"><PictureOutlined /></span>
+                <span className="rw-section-title">原图 / 结果对比</span>
+                <span className="rw-section-hint">渲染结果独立保存在素材库，视频工程后续按需选用</span>
+                {selectedSource && <Tag color="blue" style={{ marginLeft: 8 }}>当前源图已选</Tag>}
               </div>
-              {selectedSource && <Tag color="blue">当前源图已选</Tag>}
-            </div>
-            {selectedSourceImg ? (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="render-source-frame">
-                        <img src={selectedSourceImg.url} alt="源图" />
-                      </div>
-                      <Text className="render-source-meta">
-                        {selectedSourceImg.width}×{selectedSourceImg.height} · {selectedSourceImg.camera_angle} · {selectedSourceImg.source_software}
-                      </Text>
-                    </div>
-            ) : (
-              <Empty description="暂无源图，请在右侧上传模型截图" />
-            )}
-
-            <Divider />
-
-            <Text strong>生成版本</Text>
-            {versions.length === 0 && <Empty description="暂无渲染版本" style={{ marginTop: 12 }} />}
-            <div className="workspace-version-grid">
-              {versions.map((v) => {
-                const q = QUALITY_STATUS_MAP[v.quality_status] || { label: v.quality_status, color: 'default' }
-                const asset = sourceImages.find((s) => s.id === v.result_asset_id)
-                return (
-                  <Card key={v.id} size="small" className="workspace-version-card">
-                    <div style={{ position: 'relative' }}>
-                      <div className="version-thumb">
-                        {asset?.url ? <img src={asset.url} alt={`V${v.version_number}`} /> : <Text type="secondary">V{v.version_number}</Text>}
-                      </div>
-                      <Tag color={q.color} style={{ position: 'absolute', top: 4, right: 4, fontSize: 10 }}>
-                        {q.label}
-                      </Tag>
-                    </div>
-                    <Space style={{ marginTop: 6, width: '100%', justifyContent: 'space-between' }}>
-                      <Text strong style={{ fontSize: 12 }}>V{v.version_number}</Text>
-                      <Text type="secondary" style={{ fontSize: 10 }}>
-                        seed:{v.seed ?? '-'}
-                      </Text>
-                    </Space>
-                    <Space style={{ marginTop: 4 }} wrap>
-                      <Button size="small" icon={<ExpandOutlined />} onClick={() => handleCompare(v)}>
-                        预览版本
-                      </Button>
-                      <Dropdown
-                        trigger={['click']}
-                        menu={{
-                          items: [
-                            { key: 'compare', icon: <ExpandOutlined />, label: '对比' },
-                          ],
-                          onClick: ({ key }) => {
-                            if (key === 'compare') handleCompare(v)
-                          },
-                        }}
-                      >
-                        <Button size="small" icon={<MoreOutlined />} aria-label={`V${v.version_number} 更多操作`} title="更多操作" />
-                      </Dropdown>
-                    </Space>
-                  </Card>
-                )
-              })}
-            </div>
-
-            <Divider />
-
-            <Text strong>最近任务</Text>
-            {tasks.length === 0 && <Empty description="暂无渲染任务" style={{ marginTop: 12 }} />}
-            <List
-              size="small"
-              dataSource={tasks.slice(0, 5)}
-              renderItem={(t) => (
-                <List.Item>
-                  <Space>
-                    <Tag>{OPERATIONS.find((o) => o.value === t.operation_type)?.label || t.operation_type}</Tag>
-                    <TaskStatusTag status={t.status} />
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {t.progress}% · {t.provider}
-                    </Text>
-                    {t.status === 'failed' && (
-                      <Tooltip title={t.error_message}>
-                        <Tag color="error" style={{ cursor: 'pointer' }}>失败</Tag>
-                      </Tooltip>
-                    )}
-                    {t.status === 'failed' && (
-                      <Button size="small" icon={<ReloadOutlined />} onClick={() => renderApi.retryTask(projectId, t.id).then(() => { setActiveTaskId(t.id); fetchAll() })}>
-                        重试
-                      </Button>
-                    )}
-                  </Space>
-                </List.Item>
+              {selectedSourceImg ? (
+                <div>
+                  <div className="render-source-frame">
+                    <img src={selectedSourceImg.url} alt="源图" />
+                  </div>
+                  <div className="rw-source-meta-chips">
+                    <span className="rw-meta-chip">{selectedSourceImg.width}×{selectedSourceImg.height}</span>
+                    {selectedSourceImg.camera_angle && <span className="rw-meta-chip">{selectedSourceImg.camera_angle}</span>}
+                    {selectedSourceImg.source_software && <span className="rw-meta-chip">{selectedSourceImg.source_software}</span>}
+                  </div>
+                </div>
+              ) : (
+                <div className="rw-empty">
+                  <span className="rw-empty-icon"><PictureOutlined /></span>
+                  <span className="rw-empty-title">暂无源图</span>
+                  <span className="rw-empty-hint">请在右侧上传模型截图，或从左侧素材库选择</span>
+                </div>
               )}
-            />
+            </div>
+
+            <div className="rw-section">
+              <div className="rw-section-head">
+                <span className="rw-section-icon"><AppstoreOutlined /></span>
+                <span className="rw-section-title">生成版本</span>
+                <span className="rw-section-hint">{versions.length > 0 ? `${versions.length} 个版本` : '选择源图后展示其渲染版本'}</span>
+              </div>
+              {versions.length === 0 ? (
+                <div className="rw-empty">
+                  <span className="rw-empty-icon"><AppstoreOutlined /></span>
+                  <span className="rw-empty-title">暂无渲染版本</span>
+                  <span className="rw-empty-hint">在右侧配置参数并点击「开始生成」</span>
+                </div>
+              ) : (
+                <div className="rw-version-grid">
+                  {versions.map((v) => {
+                    const q = QUALITY_STATUS_MAP[v.quality_status] || { label: v.quality_status, color: 'default' }
+                    const asset = sourceImages.find((s) => s.id === v.result_asset_id)
+                    return (
+                      <div key={v.id} className="rw-version-card">
+                        <div className="rw-version-thumb">
+                          {asset?.url ? <img src={asset.url} alt={`V${v.version_number}`} /> : <span>V{v.version_number}</span>}
+                          <span className={`rw-quality is-${v.quality_status}`}>{q.label}</span>
+                        </div>
+                        <div className="rw-version-body">
+                          <span className="rw-version-name">V{v.version_number}</span>
+                          <span className="rw-version-seed">seed: {v.seed ?? '-'}</span>
+                        </div>
+                        <div className="rw-version-actions">
+                          <Button size="small" icon={<ExpandOutlined />} onClick={() => handleCompare(v)}>
+                            预览版本
+                          </Button>
+                          <Dropdown
+                            trigger={['click']}
+                            menu={{
+                              items: [
+                                { key: 'compare', icon: <ExpandOutlined />, label: '对比' },
+                              ],
+                              onClick: ({ key }) => {
+                                if (key === 'compare') handleCompare(v)
+                              },
+                            }}
+                          >
+                            <Button size="small" icon={<MoreOutlined />} aria-label={`V${v.version_number} 更多操作`} title="更多操作" />
+                          </Dropdown>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="rw-section">
+              <div className="rw-section-head">
+                <span className="rw-section-icon"><HistoryOutlined /></span>
+                <span className="rw-section-title">最近任务</span>
+                <span className="rw-section-hint">{tasks.length > 0 ? `最近 ${Math.min(tasks.length, 5)} 条` : ''}</span>
+              </div>
+              {tasks.length === 0 ? (
+                <div className="rw-empty">
+                  <span className="rw-empty-icon"><HistoryOutlined /></span>
+                  <span className="rw-empty-title">暂无渲染任务</span>
+                </div>
+              ) : (
+                <div className="rw-task-list">
+                  {tasks.slice(0, 5).map((t) => (
+                    <div key={t.id} className="rw-task-row">
+                      <span className="rw-task-op">{OPERATIONS.find((o) => o.value === t.operation_type)?.label || t.operation_type}</span>
+                      <TaskStatusTag status={t.status} />
+                      <span className="rw-task-meta">{t.progress}% · {t.provider}</span>
+                      <span className="rw-task-actions">
+                        {t.status === 'failed' && (
+                          <Space size={6}>
+                            <Tooltip title={t.error_message}>
+                              <Tag color="error" style={{ cursor: 'pointer', marginInlineEnd: 0 }}>失败原因</Tag>
+                            </Tooltip>
+                            <Button size="small" icon={<ReloadOutlined />} onClick={() => renderApi.retryTask(projectId, t.id).then(() => { setActiveTaskId(t.id); fetchAll() })}>
+                              重试
+                            </Button>
+                          </Space>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* 右侧：参数表单 */}
           <div className="workspace-inspector render-inspector">
-            <div className="workspace-panel-heading workspace-panel-heading-compact">
-              <div>
-                <Text strong>渲染参数</Text>
-                <Text type="secondary">控制画面风格和生成质量</Text>
-              </div>
+            <div className="rw-section-head" style={{ marginBottom: 4 }}>
+              <span className="rw-section-icon"><SlidersOutlined /></span>
+              <span className="rw-section-title">渲染参数</span>
+              <span className="rw-section-hint">控制画面风格和生成质量</span>
             </div>
             <Text className="workspace-section-label">素材</Text>
             <Upload
@@ -487,7 +508,7 @@ export default function RenderWorkspace() {
                 <InputNumber style={{ width: '100%' }} placeholder="留空自动" />
               </Form.Item>
 
-              <Button type="primary" icon={<PlayCircleOutlined />} block onClick={handleSubmit} loading={polling}>
+              <Button className="rw-submit" type="primary" icon={<PlayCircleOutlined />} block onClick={handleSubmit} loading={polling}>
                 开始生成
               </Button>
 

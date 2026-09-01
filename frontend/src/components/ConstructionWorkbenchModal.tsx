@@ -24,7 +24,6 @@ interface ConstructionWorkbenchModalProps {
   onClose: () => void
   onApply: () => void | Promise<void>
   applyLoading?: boolean
-  onLoadExample?: () => void
   recipe: Recipe | null
   onChange: (next: Recipe) => void
   prompt: string
@@ -101,7 +100,6 @@ export function ConstructionWorkbenchContent({
   onClose,
   onApply,
   applyLoading = false,
-  onLoadExample,
   recipe,
   onChange,
   prompt,
@@ -419,7 +417,6 @@ export function ConstructionWorkbenchContent({
         </div>
         <Space wrap>
           <Tag>Seedance · {modelName || '默认模型'}</Tag>
-          {onLoadExample && !recipeReady && <Button onClick={onLoadExample}>恢复三分区梁板示例</Button>}
           <Button onClick={onClose}>返回快速生成</Button>
           <Button type="primary" icon={<SendOutlined />} disabled={!providerPrompt || promptOverLimit} onClick={() => setActiveStep(5)}>检查最终提示词</Button>
         </Space>

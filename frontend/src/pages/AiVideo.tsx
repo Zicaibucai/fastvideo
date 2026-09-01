@@ -3,37 +3,32 @@ import {
   Alert,
   App,
   Button,
-  Card,
-  Col,
   Collapse,
-  Divider,
-  Empty,
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Progress,
-  Row,
   Segmented,
   Select,
   Space,
   Switch,
   Tag,
   Typography,
-  Upload,
 } from 'antd'
 import {
   ArrowRightOutlined,
   CheckCircleOutlined,
-  CheckOutlined,
-  DeleteOutlined,
+  ClockCircleOutlined,
   EditOutlined,
   LockOutlined,
+  PictureOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
+  RocketOutlined,
   SafetyOutlined,
   ThunderboltOutlined,
   UnlockOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import AiVideoVersionDrawer from '../components/ai-video/AiVideoVersionDrawer'
@@ -70,7 +65,6 @@ import {
 import { useAiVideoData } from '../hooks/useAiVideoData'
 import FrameSlot from '../components/ai-video/FrameSlot'
 import AiVideoTemplateLibrary from '../components/ai-video/AiVideoTemplateLibrary'
-import { modelButtonActive, modelButtonBase } from '../features/ai-video/styles'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -673,40 +667,57 @@ export default function AiVideo() {
     <div className="ai-video-page">
       {/* ============ 左侧：生成控制面板 ============ */}
       <div className="ai-video-controls">
-        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-          {/* 1. 功能标签 */}
-          <Text strong style={{ fontSize: 14 }}>生成功能</Text>
-          <Segmented
-            block
-            style={{ marginTop: 8 }}
-            value={generationMode}
-            onChange={(v) => {
-              const next = String(v) as 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
-              setGenerationMode(next)
-              if (next === 'multi_reference_video' && firstFrameId && !referenceAssetIds.includes(firstFrameId)) {
-                setReferenceAssetIds([firstFrameId])
-              }
-            }}
-            options={[
-              { label: '首尾帧视频', value: 'first_last_frame_video', disabled: !canFirstLast },
-              { label: '单图生视频', value: 'image_to_video', disabled: !canImageToVideo },
-              { label: '多参考图（Seedance 2.0）', value: 'multi_reference_video', disabled: !canMultiReference },
-            ]}
-          />
-          {generationMode === 'first_last_frame_video' && !canFirstLast && (
-            <Text type="warning" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-              当前模型不支持首尾帧，且不允许降级为普通图生视频
-            </Text>
-          )}
+        <div className="av-panel-head">
+          <div>
+            <div className="av-panel-title">生成控制台</div>
+            <div className="av-panel-sub">配置参考帧、模型与提示词</div>
+          </div>
+          <span className="av-panel-badge">{PROVIDER_LABELS[selectedProvider] || selectedProvider}</span>
+        </div>
+        <div className="av-controls-scroll">
+          {/* 1. 生成模式 */}
+          <section className="av-section">
+            <div className="av-section-head">
+              <span className="av-section-icon"><VideoCameraOutlined /></span>
+              <span className="av-section-title">生成模式</span>
+            </div>
+            <Segmented
+              block
+              className="av-mode-segmented"
+              value={generationMode}
+              onChange={(v) => {
+                const next = String(v) as 'image_to_video' | 'first_last_frame_video' | 'multi_reference_video'
+                setGenerationMode(next)
+                if (next === 'multi_reference_video' && firstFrameId && !referenceAssetIds.includes(firstFrameId)) {
+                  setReferenceAssetIds([firstFrameId])
+                }
+              }}
+              options={[
+                { label: '首尾帧视频', value: 'first_last_frame_video', disabled: !canFirstLast },
+                { label: '单图生视频', value: 'image_to_video', disabled: !canImageToVideo },
+                { label: '多参考图（Seedance 2.0）', value: 'multi_reference_video', disabled: !canMultiReference },
+              ]}
+            />
+            {generationMode === 'first_last_frame_video' && !canFirstLast && (
+              <Text type="warning" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                当前模型不支持首尾帧，且不允许降级为普通图生视频
+              </Text>
+            )}
+          </section>
 
-          {/* 2. 图片槽位 */}
-          <Divider style={{ margin: '14px 0' }} />
-          <Text strong style={{ fontSize: 14 }}>参考图片</Text>
-          <div style={{ marginTop: 8 }}>
+          {/* 2. 参考图片 */}
+          <section className="av-section">
+            <div className="av-section-head">
+              <span className="av-section-icon"><PictureOutlined /></span>
+              <span className="av-section-title">参考图片</span>
+              <span className="av-section-hint">
+                {generationMode === 'multi_reference_video' ? '按顺序 2~9 张' : generationMode === 'first_last_frame_video' ? '首帧 + 尾帧' : '单张参考图'}
+              </span>
+            </div>
             {generationMode === 'first_last_frame_video' ? (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <div className="av-frame-row">
                 <FrameSlot label="首帧" frame={firstFrame} images={refImages} onSelect={setFirstFrameId} onClear={() => setFirstFrameId('')} onUpload={handleUploadFrame} />
-                <div style={{ paddingTop: 40, color: '#94a3b8', flexShrink: 0 }}>
+                <div className="av-frame-connector">
                   <ArrowRightOutlined />
                 </div>
                 <FrameSlot label="尾帧" frame={lastFrame} images={refImages} onSelect={setLastFrameId} onClear={() => setLastFrameId('')} onUpload={handleUploadFrame} />
@@ -729,10 +740,18 @@ export default function AiVideo() {
                     return <Space><img src={image?.url} alt="" style={{ width: 32, height: 24, objectFit: 'cover', borderRadius: 3 }} /><span>{option.label}</span></Space>
                   }}
                 />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 10 }}>
+                <div className="av-multi-grid">
                   {referenceAssetIds.map((id, index) => {
                     const image = refImages.find((item) => item.id === id)
-                    return image ? <div key={id} style={{ minWidth: 0 }}><div style={{ position: 'relative', height: 82, borderRadius: 7, overflow: 'hidden', background: '#eef2f7' }}><img src={image.url} alt={image.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} /><Tag color={index === 0 ? 'blue' : 'default'} style={{ position: 'absolute', left: 4, top: 4, margin: 0 }}>{index + 1}</Tag></div><Text ellipsis={{ tooltip: image.name }} style={{ display: 'block', fontSize: 11, marginTop: 3 }}>{image.name}</Text></div> : null
+                    return image ? (
+                      <div key={id} style={{ minWidth: 0 }}>
+                        <div className="av-multi-thumb">
+                          <img src={image.url} alt={image.name} />
+                          <Tag color={index === 0 ? 'blue' : 'default'} style={{ position: 'absolute', left: 4, top: 4, margin: 0 }}>{index + 1}</Tag>
+                        </div>
+                        <Text ellipsis={{ tooltip: image.name }} style={{ display: 'block', fontSize: 11, marginTop: 3 }}>{image.name}</Text>
+                      </div>
+                    ) : null
                   })}
                 </div>
                 <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 11 }}>第一张作为首参考图，其余图片按选中顺序发送给 Seedance。</Text>
@@ -740,248 +759,215 @@ export default function AiVideo() {
             ) : (
               <FrameSlot label="参考图（首帧）" frame={firstFrame} images={refImages} onSelect={setFirstFrameId} onClear={() => setFirstFrameId('')} onUpload={handleUploadFrame} />
             )}
-          </div>
+          </section>
 
-          {/* 3. 模型类型（按钮式单选） */}
-          <Divider style={{ margin: '14px 0' }} />
-          <Text strong style={{ fontSize: 14 }}>模型类型</Text>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-            {providers.map((p) => {
-              const active = selectedProvider === p.provider
-              return (
-                <button
-                  key={p.provider}
-                  type="button"
-                  disabled={!p.available}
-                  onClick={() => handleProviderChange(p.provider)}
-                  style={{
-                    ...modelButtonBase,
-                    ...(active ? modelButtonActive : {}),
-                    ...(p.available ? {} : { opacity: 0.45, cursor: 'not-allowed' }),
-                  }}
-                  title={p.available ? undefined : '未配置 Key'}
-                >
-                  {PROVIDER_LABELS[p.provider] || p.provider}
-                  {p.is_mock ? '（本地演示）' : !p.available ? '（未配置）' : ''}
-                </button>
-              )
-            })}
+          {/* 3. 生成模型 */}
+          <section className="av-section">
+            <div className="av-section-head">
+              <span className="av-section-icon"><RocketOutlined /></span>
+              <span className="av-section-title">生成模型</span>
+            </div>
+            <div className="av-provider-grid">
+              {providers.map((p) => {
+                const active = selectedProvider === p.provider
+                return (
+                  <button
+                    key={p.provider}
+                    type="button"
+                    disabled={!p.available}
+                    onClick={() => handleProviderChange(p.provider)}
+                    className={`av-provider-btn${active ? ' is-active' : ''}`}
+                    title={p.available ? undefined : '未配置 Key'}
+                  >
+                    <span className="av-provider-name">{PROVIDER_LABELS[p.provider] || p.provider}</span>
+                    <span className="av-provider-status">
+                      <i className="av-dot" />
+                      {p.is_mock ? '本地演示' : p.available ? '已就绪' : '未配置 Key'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
             {providers.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>暂无可用模型</Text>}
-          </div>
-          {currentProvider && (currentProvider.models?.length || 0) > 1 && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>模型版本：</Text>
+            {currentProvider && (currentProvider.models?.length || 0) > 1 && (
               <Select
                 size="small"
-                style={{ width: '100%', marginTop: 4 }}
+                style={{ width: '100%', marginTop: 8 }}
                 value={modelName}
                 onChange={setModelName}
                 options={((currentProvider.models as string[]) || []).map((m) => ({ label: m, value: m }))}
               />
+            )}
+            <div className="av-model-line">当前模型：<strong>{modelName || '默认'}</strong></div>
+            <div className="av-caps">
+              <span className={`av-cap${canImageToVideo ? ' is-on' : ''}`}>图生视频</span>
+              <span className={`av-cap${canFirstLast ? ' is-on' : ''}`}>首尾帧</span>
+              <span className={`av-cap${canMultiReference ? ' is-on' : ''}`}>多参考图 2~9 张</span>
+              <span className={`av-cap${providerCaps.generate_audio === true ? ' is-on' : ''}`}>生成声音</span>
+              <span className="av-cap">5 / 8 / 10 / 15 秒</span>
             </div>
-          )}
+          </section>
 
-          {/* 4. 模型说明 */}
-          <div
-            style={{
-              marginTop: 10,
-              background: '#f8fafc',
-              borderRadius: 8,
-              padding: '10px 12px',
-              fontSize: 12,
-              color: '#475569',
-              lineHeight: 1.9,
-            }}
-          >
-            <div><Text strong style={{ fontSize: 12, color: '#334155' }}>模型：</Text>{modelName || '无'}</div>
-            <div>图生视频：{canImageToVideo ? '支持' : '不支持'}</div>
-            <div>首尾帧过渡：{canFirstLast ? '支持' : '不支持'}</div>
-            <div>多参考图：{canMultiReference ? '支持（2~9张）' : '不支持'}</div>
-            <div>生成声音：{providerCaps.generate_audio === true ? '支持（可关闭）' : '不支持'}</div>
-            <div>视频时长：5 / 8 / 10 / 15 秒</div>
-          </div>
-
-          <div style={{ marginTop: 12, padding: 12, border: '1px solid #b9cceb', borderRadius: 8, background: 'linear-gradient(135deg, #f4f8ff 0%, #ffffff 72%)' }}>
-            <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-              <Space align="start" size={9}>
-                <SafetyOutlined style={{ marginTop: 3, color: '#2457A6', fontSize: 16 }} />
-                <div>
-                  <Text strong style={{ display: 'block', color: '#183b73', fontSize: 13 }}>高级生成 · 施工提示词工程</Text>
-                  <Text type="secondary" style={{ display: 'block', marginTop: 3, fontSize: 11, lineHeight: 1.45 }}>WBS、施工状态、双时间轴和验收清单集中配置，统一投喂 Seedance。</Text>
-                  <Text type={advancedEnabled ? 'success' : 'secondary'} style={{ display: 'block', marginTop: 4, fontSize: 11, lineHeight: 1.45 }}>
-                    {advancedEnabled
-                      ? '高级配方已应用到本次生成。'
-                      : isConstructionRecipe(promptRecipe)
-                        ? '提示词大师已解析施工配方；请进入工作台查看分栏字段，未应用前不会投喂。'
-                        : '未进入并应用工作台时，快速生成只使用普通镜头提示词。'}
-                  </Text>
-                </div>
-              </Space>
-              <Button
-                type="primary"
-                size="small"
-                onClick={openAdvancedWorkbench}
-              >进入工作台</Button>
-            </Space>
-          </div>
-
-          {/* 5. 输入描述 */}
-          <Divider style={{ margin: '14px 0' }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <div><Text strong style={{ fontSize: 14 }}>镜头提示词</Text><Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 3 }}>描述镜头运动、建筑状态和画面节奏，最多 500 个字符。</Text></div>
-            <Text type={prompt.length >= 500 ? 'danger' : 'secondary'} style={{ fontSize: 11 }}>{prompt.length} / 500</Text>
-          </div>
-          <div style={{ marginTop: 9 }}>
+          {/* 4. 镜头提示词 */}
+          <section className="av-section">
+            <div className="av-section-head">
+              <span className="av-section-icon"><EditOutlined /></span>
+              <span className="av-section-title">镜头提示词</span>
+              <span className="av-section-hint" style={prompt.length >= 500 ? { color: '#c23a3a' } : undefined}>{prompt.length} / 500</span>
+            </div>
             <Input.TextArea
+              className="av-prompt-input"
               rows={6}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value.slice(0, 500))}
-              placeholder="描述你想要的镜头与画面，例如：镜头缓慢推进，建筑主体稳定居中，光影自然"
-              style={{ fontSize: 13, resize: 'vertical' }}
+              placeholder="描述镜头运动、建筑状态和画面节奏，例如：镜头缓慢推进，建筑主体稳定居中，光影自然"
               maxLength={500}
             />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-              <Text type="secondary" style={{ fontSize: 11 }}>AI读取多图生成提示词。</Text>
-              <Button type="primary" icon={<ThunderboltOutlined />} loading={masterLoading} onClick={handlePromptMaster}>提示词大师</Button>
+            <div className="av-prompt-footer">
+              <span className="av-prompt-hint">AI 可读取所选参考图，自动生成提示词</span>
+              <Button className="av-master-btn" icon={<ThunderboltOutlined />} loading={masterLoading} onClick={handlePromptMaster}>提示词大师</Button>
             </div>
-          </div>
+          </section>
 
-          {/* 6. 视频时长 */}
-          <Divider style={{ margin: '14px 0' }} />
-          <Text strong style={{ fontSize: 14 }}>视频时长</Text>
-          <Segmented
-            block
-            style={{ marginTop: 8 }}
-            value={duration}
-            onChange={(v) => setDuration(Number(v))}
-            options={DURATION_OPTIONS.map((d) => ({ label: `${d}S`, value: d }))}
-          />
-
-          {/* 高级参数 */}
-          <div style={{ marginTop: 12 }}>
-            <Collapse
-              ghost
-              size="small"
-              items={[
-                {
-                  key: 'advanced',
-                  label: '高级参数',
-                  children: (
-                    <div style={{ paddingTop: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Space align="center">
-                          <Switch checked={constraintsEnabled} onChange={setConstraintsEnabled} checkedChildren={<SafetyOutlined />} unCheckedChildren={<SafetyOutlined />} />
-                          <Text strong style={{ fontSize: 13 }}>建筑强约束（默认启用）</Text>
-                        </Space>
-                      </div>
-                      {constraintsEnabled && (
-                        <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-                          {(templates.find((t) => t.id === selectedTemplateId)?.default_arch_constraints || []).length > 0
-                            ? (templates.find((t) => t.id === selectedTemplateId)?.default_arch_constraints || []).join('；')
-                            : '锁定建筑主体数量、体量、轮廓、层数；锁定道路、主入口、门窗、设备位置；禁止新增/删除主体与楼层等'}
-                        </div>
-                      )}
-
-                      <Divider style={{ margin: '12px 0' }} />
-
-                      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="center">
-                        <Space align="center">
-                          <Switch
-                            checked={seedLock}
-                            onChange={(v) => {
-                              setSeedLock(v)
-                              if (!v) setSeed(null)
-                            }}
-                            checkedChildren={<LockOutlined />}
-                            unCheckedChildren={<UnlockOutlined />}
-                          />
-                          <Text strong style={{ fontSize: 13 }}>随机种子锁定</Text>
-                        </Space>
-                        {seedLock && (
-                          <InputNumber
-                            style={{ width: 140 }}
-                            size="small"
-                            min={0}
-                            value={seed}
-                            onChange={(v) => setSeed(v)}
-                            placeholder="固定种子"
-                          />
-                        )}
-                      </Space>
-
-                      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                        <div style={{ flex: 1 }}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>画面比例</Text>
-                          <Select size="small" style={{ width: '100%', marginTop: 4 }} value={aspectRatio} onChange={setAspectRatio} options={RATIO_OPTIONS.map((r) => ({ label: r, value: r }))} />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>分辨率</Text>
-                          <Select size="small" style={{ width: '100%', marginTop: 4 }} value={resolution} onChange={setResolution} options={RESOLUTION_OPTIONS.map((r) => ({ label: r, value: r }))} />
-                        </div>
-                      </div>
-
-                      <div style={{ marginTop: 12 }}>
-                        <Space>
-                          <Switch checked={generateAudio} onChange={setGenerateAudio} disabled={providerCaps.generate_audio !== true} size="small" />
-                          <Text style={{ fontSize: 13 }}>生成声音</Text>
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            {providerCaps.generate_audio === true ? '默认关闭，避免不可控音效' : '当前模型不支持'}
-                          </Text>
-                        </Space>
-                      </div>
-
-                      <div style={{ marginTop: 12 }}>
-                        <Text type="secondary" style={{ fontSize: 12 }}>负向提示词（可选）</Text>
-                        <Input.TextArea
-                          rows={2}
-                          style={{ marginTop: 4, fontSize: 13 }}
-                          value={negativePrompt}
-                          onChange={(e) => setNegativePrompt(e.target.value)}
-                          placeholder="禁止内容，如：禁止改变建筑轮廓"
-                        />
-                      </div>
-
-                      <div style={{ marginTop: 12 }}>
-                        <Text type="secondary" style={{ fontSize: 12 }}>最终提交提示词预览</Text>
-                        <div
-                          style={{
-                            marginTop: 4,
-                            padding: 8,
-                            background: '#F8FAFC',
-                            border: '1px solid #E4E9F0',
-                            borderRadius: 6,
-                            fontSize: 12,
-                            color: '#444',
-                            minHeight: 40,
-                            whiteSpace: 'pre-wrap',
-                          }}
-                        >
-                          {compiledPromptPreview || finalPromptPreview || '（空）'}
-                        </div>
-                      </div>
-
-                    </div>
-                  ),
-                },
-              ]}
+          {/* 5. 视频时长 */}
+          <section className="av-section">
+            <div className="av-section-head">
+              <span className="av-section-icon"><ClockCircleOutlined /></span>
+              <span className="av-section-title">视频时长</span>
+            </div>
+            <Segmented
+              block
+              className="av-duration-segmented"
+              value={duration}
+              onChange={(v) => setDuration(Number(v))}
+              options={DURATION_OPTIONS.map((d) => ({ label: `${d}S`, value: d }))}
             />
-          </div>
+          </section>
+
+          {/* 6. 高级参数 */}
+          <Collapse
+            ghost
+            size="small"
+            className="av-advanced"
+            items={[
+              {
+                key: 'advanced',
+                label: '高级参数',
+                children: (
+                  <div style={{ paddingTop: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Space align="center">
+                        <Switch checked={constraintsEnabled} onChange={setConstraintsEnabled} checkedChildren={<SafetyOutlined />} unCheckedChildren={<SafetyOutlined />} />
+                        <Text strong style={{ fontSize: 13 }}>建筑强约束（默认启用）</Text>
+                      </Space>
+                    </div>
+                    {constraintsEnabled && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+                        {(templates.find((t) => t.id === selectedTemplateId)?.default_arch_constraints || []).length > 0
+                          ? (templates.find((t) => t.id === selectedTemplateId)?.default_arch_constraints || []).join('；')
+                          : '锁定建筑主体数量、体量、轮廓、层数；锁定道路、主入口、门窗、设备位置；禁止新增/删除主体与楼层等'}
+                      </div>
+                    )}
+
+                    <div style={{ height: 1, background: '#eef1f6', margin: '12px 0' }} />
+
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }} align="center">
+                      <Space align="center">
+                        <Switch
+                          checked={seedLock}
+                          onChange={(v) => {
+                            setSeedLock(v)
+                            if (!v) setSeed(null)
+                          }}
+                          checkedChildren={<LockOutlined />}
+                          unCheckedChildren={<UnlockOutlined />}
+                        />
+                        <Text strong style={{ fontSize: 13 }}>随机种子锁定</Text>
+                      </Space>
+                      {seedLock && (
+                        <InputNumber
+                          style={{ width: 140 }}
+                          size="small"
+                          min={0}
+                          value={seed}
+                          onChange={(v) => setSeed(v)}
+                          placeholder="固定种子"
+                        />
+                      )}
+                    </Space>
+
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <div style={{ flex: 1 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>画面比例</Text>
+                        <Select size="small" style={{ width: '100%', marginTop: 4 }} value={aspectRatio} onChange={setAspectRatio} options={RATIO_OPTIONS.map((r) => ({ label: r, value: r }))} />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>分辨率</Text>
+                        <Select size="small" style={{ width: '100%', marginTop: 4 }} value={resolution} onChange={setResolution} options={RESOLUTION_OPTIONS.map((r) => ({ label: r, value: r }))} />
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <Space>
+                        <Switch checked={generateAudio} onChange={setGenerateAudio} disabled={providerCaps.generate_audio !== true} size="small" />
+                        <Text style={{ fontSize: 13 }}>生成声音</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {providerCaps.generate_audio === true ? '默认关闭，避免不可控音效' : '当前模型不支持'}
+                        </Text>
+                      </Space>
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>负向提示词（可选）</Text>
+                      <Input.TextArea
+                        rows={2}
+                        style={{ marginTop: 4, fontSize: 13 }}
+                        value={negativePrompt}
+                        onChange={(e) => setNegativePrompt(e.target.value)}
+                        placeholder="禁止内容，如：禁止改变建筑轮廓"
+                      />
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>最终提交提示词预览</Text>
+                      <div
+                        style={{
+                          marginTop: 4,
+                          padding: 8,
+                          background: '#F8FAFC',
+                          border: '1px solid #E4E9F0',
+                          borderRadius: 6,
+                          fontSize: 12,
+                          color: '#444',
+                          minHeight: 40,
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
+                        {compiledPromptPreview || finalPromptPreview || '（空）'}
+                      </div>
+                    </div>
+
+                  </div>
+                ),
+              },
+            ]}
+          />
         </div>
 
         {activeJob && (
-          <Card size="small" style={{ margin: '12px 16px', borderColor: activeJob.status === 'failed' ? '#ffccc7' : '#d6e4ff' }}>
-            <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
+          <div className={`av-job-card${activeJob.status === 'failed' ? ' is-failed' : activeJob.status === 'success' ? ' is-success' : ''}`}>
+            <div className="av-job-head">
               <div>
-                <Text strong style={{ fontSize: 13 }}>
+                <div className="av-job-title">
                   {activeJob.status === 'success' ? '生成完成' : activeJob.status === 'failed' ? '生成失败' : '视频生成中'}
-                </Text>
-                <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 3 }}>
+                </div>
+                <div className="av-job-meta">
                   {PROVIDER_LABELS[activeJob.provider] || activeJob.provider} · {activeJob.model_name || '默认模型'} · {activeJob.duration}s
-                </Text>
+                </div>
               </div>
               {activeJob.status === 'success' && <Tag color="green" icon={<CheckCircleOutlined />}>已入素材库</Tag>}
               {activeJob.status === 'failed' && <Button size="small" icon={<ReloadOutlined />} onClick={handleRetryJob}>重试</Button>}
-            </Space>
+            </div>
             {['queued', 'running'].includes(activeJob.status) && <Progress percent={activeJob.progress || 5} status="active" size="small" style={{ marginTop: 8, marginBottom: 0 }} />}
             {activeJob.status === 'failed' && <Text type="danger" style={{ display: 'block', fontSize: 11, marginTop: 8 }}>{activeJob.error_message || 'Provider 返回失败，请检查配置后重试'}</Text>}
             {activeJob.status === 'success' && <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 8 }}>结果素材 ID：{activeJob.result_asset_id || '等待素材索引'}</Text>}
@@ -994,7 +980,7 @@ export default function AiVideo() {
                 style={{ marginTop: 8, fontSize: 11 }}
               />
             )}
-          </Card>
+          </div>
         )}
 
         {/* 7. 底部主操作按钮 */}

@@ -6,7 +6,6 @@ import { ConstructionWorkbenchContent } from '../components/ConstructionWorkbenc
 import { videoGenApi } from '../api'
 import type { ReferenceImage, VideoGenerationJob } from '../api/types'
 import { readAiVideoDraft, saveAiVideoDraft, type AiVideoDraft } from '../utils/aiVideoDraft'
-import { threeZoneSlabPromptExample, threeZoneSlabRecipeExample } from '../data/constructionRecipeExamples'
 
 type Recipe = Record<string, any>
 
@@ -268,19 +267,6 @@ export default function ConstructionWorkbenchPage() {
     }
   }
 
-  const loadThreeZoneExample = () => {
-    const exampleRecipe = JSON.parse(JSON.stringify(threeZoneSlabRecipeExample))
-    setRecipe(exampleRecipe)
-    setPrompt(threeZoneSlabPromptExample)
-    setDuration(15)
-    // 示例恢复是一次完整的数据操作，立即落盘，避免用户加载后立刻刷新时被旧草稿覆盖。
-    saveAiVideoDraft(projectId, {
-      recipe: exampleRecipe,
-      prompt: threeZoneSlabPromptExample,
-      duration: 15,
-    })
-  }
-
   return (
     <div style={{ minHeight: 'calc(100vh - 68px)', margin: '-28px -32px -40px', background: '#f4f6f9' }}>
       <ConstructionWorkbenchContent
@@ -288,7 +274,6 @@ export default function ConstructionWorkbenchPage() {
         onClose={goBack}
         onApply={applyAndGenerate}
         applyLoading={submitting}
-        onLoadExample={loadThreeZoneExample}
         recipe={recipe}
         onChange={setRecipe}
         prompt={prompt}

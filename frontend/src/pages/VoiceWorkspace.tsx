@@ -6,9 +6,7 @@ import {
   Space,
   Button,
   Dropdown,
-  List,
   Tag,
-  Empty,
   Form,
   Input,
   Select,
@@ -24,6 +22,8 @@ import {
   Tooltip,
 } from 'antd'
 import {
+  AppstoreOutlined,
+  AudioOutlined,
   PlayCircleOutlined,
   CheckOutlined,
   SoundOutlined,
@@ -33,7 +33,9 @@ import {
   ThunderboltOutlined,
   DownloadOutlined,
   FileTextOutlined,
+  LinkOutlined,
   MoreOutlined,
+  SlidersOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { CollabEntry } from '../components/collab/CollabEntry'
@@ -332,22 +334,19 @@ export default function VoiceWorkspace() {
 
   return (
     <div>
-      <div className="page-header workspace-page-header">
-        <div className="page-heading">
-          <Title level={3} style={{ marginBottom: 6 }}>
-            配音制作
-          </Title>
-          <Text type="secondary" className="page-description">
+      <div className="rw-page-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="rw-eyebrow">VOICE STUDIO</div>
+          <Title level={3} className="rw-title">配音制作</Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>
             解说词 → 朗读规范化 → AI 配音 → 版本管理 → 字幕生成
           </Text>
-          <div style={{ marginTop: 8 }}>
-            {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
-          </div>
         </div>
+        {projectId && <CollabEntry projectId={projectId} targetType="project" label="协作" />}
       </div>
 
       {/* 顶部操作栏 */}
-      <Space wrap className="workspace-toolbar">
+      <div className="vw-toolbar">
         <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setBatchModalOpen(true)}>
           批量生成配音
         </Button>
@@ -379,71 +378,71 @@ export default function VoiceWorkspace() {
           .map((j) => (
             <Progress key={j.id} type="circle" size={42} percent={j.progress} format={() => `${j.progress}%`} />
           ))}
-      </Space>
+      </div>
 
       <Card className="workspace-shell voice-workspace-shell">
         <div className="workspace-split-layout">
           {/* 左侧：分镜列表 */}
           <div className="workspace-sidebar voice-sidebar">
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <Segmented
-                size="small"
-                value={shotFilter}
-                onChange={(v) => setShotFilter(String(v))}
-                options={[
-                  { label: '全部', value: 'all' },
-                  { label: '缺配音', value: 'missing' },
-                  { label: '生成中', value: 'generating' },
-                ]}
-              />
-              <List
-                size="small"
-                dataSource={filteredShots}
-                renderItem={(s) => (
-                  <List.Item
-                    className={`workspace-list-item ${selectedShot?.id === s.id ? 'is-selected' : ''}`}
+            <div className="rw-side-head">
+              <span className="rw-section-icon"><AudioOutlined /></span>
+              <span className="rw-side-title">解说词分镜</span>
+              <span className="rw-side-count">{filteredShots.length} / {shots.length}</span>
+            </div>
+            <Segmented
+              size="small"
+              value={shotFilter}
+              onChange={(v) => setShotFilter(String(v))}
+              options={[
+                { label: '全部', value: 'all' },
+                { label: '缺配音', value: 'missing' },
+                { label: '生成中', value: 'generating' },
+              ]}
+            />
+            {filteredShots.length === 0 ? (
+              <div className="rw-empty" style={{ marginTop: 12 }}>
+                <span className="rw-empty-icon"><AudioOutlined /></span>
+                <span className="rw-empty-title">当前筛选下没有解说词分镜</span>
+                <Button size="small" style={{ marginTop: 4 }} onClick={() => navigate(`/project/${projectId}/storyboard`)}>
+                  前往解说词系统
+                </Button>
+              </div>
+            ) : (
+              <div className="vw-shot-list">
+                {filteredShots.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`vw-shot-card${selectedShot?.id === s.id ? ' is-selected' : ''}`}
                     onClick={() => handleSelectShot(s)}
                   >
-                    <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                        <b style={{ fontSize: 13 }}>#{s.sequence} {s.title}</b>
-                      </Space>
-                      <Space size={4} wrap>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          {(s.narration || '').length}字 · {s.duration_seconds ?? '-'}s
-                        </Text>
-                        {s.audio_asset_id ? (
-                          <Tag color="green" style={{ fontSize: 10, margin: 0 }}>有配音</Tag>
-                        ) : (
-                          <Tag style={{ fontSize: 10, margin: 0 }}>缺配音</Tag>
-                        )}
-                      </Space>
-                    </Space>
-                  </List.Item>
-                )}
-                locale={{
-                  emptyText: (
-                    <Empty description="当前筛选下没有解说词分镜">
-                      <Button size="small" onClick={() => navigate(`/project/${projectId}/storyboard`)}>
-                        前往解说词系统
-                      </Button>
-                    </Empty>
-                  ),
-                }}
-              />
-            </Space>
+                    <div className="vw-shot-top">
+                      <span className="vw-shot-name">#{s.sequence} {s.title}</span>
+                      {s.status === 'ai_generating' ? (
+                        <span className="vw-pill is-busy">生成中</span>
+                      ) : s.audio_asset_id ? (
+                        <span className="vw-pill is-ok">有配音</span>
+                      ) : (
+                        <span className="vw-pill is-missing">缺配音</span>
+                      )}
+                    </div>
+                    <div className="vw-shot-meta">
+                      {(s.narration || '').length}字 · {s.duration_seconds ?? '-'}s
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 中间：配音编辑 */}
           <div className="workspace-main voice-workspace-main">
             {selectedShot ? (
               <>
-                <div className="workspace-panel-heading">
-                  <div>
-                    <Text strong>解说词 #{selectedShot.sequence}</Text>
-                    <Text type="secondary">先确认朗读文本，再生成和管理配音版本</Text>
-                  </div>
-                  <Space size={6}>
+                <div className="rw-section-head">
+                  <span className="rw-section-icon"><FileTextOutlined /></span>
+                  <span className="rw-section-title">解说词 #{selectedShot.sequence}</span>
+                  <span className="rw-section-hint">先确认朗读文本，再生成和管理配音版本</span>
+                  <Space size={6} style={{ marginLeft: 8 }}>
                     {selectedVersion?.is_mock && <Tag color="orange">Mock Audio</Tag>}
                     {selectedVersion?.is_stale && <Tag color="error">解说词已修改，需要重新生成配音</Tag>}
                   </Space>
@@ -468,114 +467,96 @@ export default function VoiceWorkspace() {
                   />
                 </div>
 
-                <div className="voice-audio-panel">
-                  <div className="voice-audio-player">
-                    <audio
-                      ref={audioRef}
-                      controls
-                      src={selectedVersion?.audio_url}
-                      style={{ width: '100%' }}
-                    />
-                  </div>
+                {selectedVersion ? (
+                  <>
+                    <div className="voice-audio-panel">
+                      <div className="voice-audio-player">
+                        <audio
+                          ref={audioRef}
+                          controls
+                          src={selectedVersion?.audio_url}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
 
-                  {selectedVersion?.waveform_data?.points ? (
-                    <div className="voice-waveform">
-                      {(selectedVersion.waveform_data.points as number[]).map((p, i) => (
-                        <div key={i} style={{ height: Math.max(2, Math.round(p * 40)) }} />
-                      ))}
+                      {selectedVersion?.waveform_data?.points && (
+                        <div className="voice-waveform">
+                          {(selectedVersion.waveform_data.points as number[]).map((p, i) => (
+                            <div key={i} style={{ height: Math.max(2, Math.round(p * 40)) }} />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <Empty description="生成配音后显示波形" style={{ margin: '8px 0' }} />
-                  )}
-                </div>
 
-                {/* 目标/实际时长对比 */}
-                <Space wrap style={{ marginTop: 8 }}>
-                  <Tag>目标 {selectedShot.duration_seconds ?? '-'}s</Tag>
-                  <Tag>预计 {estimate?.estimated_duration_seconds ?? '-'}s</Tag>
-                  <Tag color="blue">实际 {selectedVersion?.actual_duration_seconds ?? '-'}s</Tag>
-                  {selectedVersion && (
-                    <Tag color={DURATION_STATUS_MAP[selectedVersion.duration_status]?.color}>
-                      {DURATION_STATUS_MAP[selectedVersion.duration_status]?.label || selectedVersion.duration_status}
-                    </Tag>
-                  )}
-                </Space>
-                {estimate?.suggestion && (
-                  <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-                    {estimate.suggestion}
-                  </Text>
+                    {/* 目标/实际时长对比 */}
+                    <div className="rw-source-meta-chips" style={{ marginTop: 12 }}>
+                      <span className="rw-meta-chip">目标 {selectedShot.duration_seconds ?? '-'}s</span>
+                      <span className="rw-meta-chip">预计 {estimate?.estimated_duration_seconds ?? '-'}s</span>
+                      <span className="rw-meta-chip">实际 {selectedVersion.actual_duration_seconds ?? '-'}s</span>
+                      <Tag color={DURATION_STATUS_MAP[selectedVersion.duration_status]?.color} style={{ marginInlineEnd: 0 }}>
+                        {DURATION_STATUS_MAP[selectedVersion.duration_status]?.label || selectedVersion.duration_status}
+                      </Tag>
+                    </div>
+                    {estimate?.suggestion && (
+                      <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                        {estimate.suggestion}
+                      </Text>
+                    )}
+
+                    {/* 字幕句段 */}
+                    <div className="rw-section">
+                      <div className="rw-section-head" style={{ marginTop: 20 }}>
+                        <span className="rw-section-icon"><FileTextOutlined /></span>
+                        <span className="rw-section-title">字幕句段</span>
+                        <span className="rw-section-hint">{subtitleData.length > 0 ? `${subtitleData.length} 句，点击可跳转试听` : ''}</span>
+                        {subtitleData.length > 0 && (
+                          <Button size="small" icon={<FileTextOutlined />} style={{ marginLeft: 8 }} onClick={() => setSubtitleModalOpen(true)}>
+                            编辑字幕
+                          </Button>
+                        )}
+                      </div>
+                      {subtitleData.length > 0 && (
+                        <div className="vw-subtitle-list">
+                          {subtitleData.map((seg) => (
+                            <div key={seg.sequence} className="vw-subtitle-row" onClick={() => seekTo(seg.start_ms)}>
+                              <span className="vw-subtitle-time">{fmtTime(seg.start_ms)}</span>
+                              <span className="vw-subtitle-text">{seg.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rw-empty" style={{ marginTop: 16, padding: '40px 20px' }}>
+                    <span className="rw-empty-icon"><AudioOutlined /></span>
+                    <span className="rw-empty-title">暂无配音版本</span>
+                    <span className="rw-empty-hint">在右侧选择音色并调整参数，点击「生成配音」；生成后这里会显示音频波形、字幕句段和版本管理</span>
+                  </div>
                 )}
 
-                <Divider style={{ margin: '12px 0' }} />
-
-                {/* 字幕句段 */}
-                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                  <Text strong>字幕句段</Text>
-                  <Button size="small" icon={<FileTextOutlined />} onClick={() => setSubtitleModalOpen(true)}>
-                    编辑字幕
-                  </Button>
-                </Space>
-                {subtitleData.length === 0 && <Empty description="生成配音后自动生成字幕" style={{ margin: '8px 0' }} />}
-                <List
-                  size="small"
-                  dataSource={subtitleData}
-                  renderItem={(seg) => (
-                    <List.Item style={{ cursor: 'pointer' }} onClick={() => seekTo(seg.start_ms)}>
-                      <Space>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          {fmtTime(seg.start_ms)}
-                        </Text>
-                        <Text>{seg.text}</Text>
-                      </Space>
-                    </List.Item>
-                  )}
-                  locale={{ emptyText: '' }}
-                />
-
-                <Divider style={{ margin: '12px 0' }} />
-
                 {/* 版本列表 */}
-                <Text strong>配音版本</Text>
-                {versions.length === 0 && <Empty description="暂无配音版本" style={{ margin: '8px 0' }} />}
-                <Table
-                  className="workspace-data-table"
-                  size="small"
-                  rowKey="id"
-                  style={{ marginTop: 8 }}
-                  dataSource={versions}
-                  pagination={false}
-                  columns={[
-                    { title: '版本', dataIndex: 'version_number', width: 56, render: (n) => `V${n}` },
-                    {
-                      title: '时长',
-                      width: 70,
-                      render: (_, v) => `${v.actual_duration_seconds ?? '-'}s`,
-                    },
-                    { title: '语速', width: 56, dataIndex: 'speed' },
-                    {
-                      title: '质量',
-                      width: 70,
-                      render: (_, v) => (
-                        <Tag color={QUALITY_STATUS_MAP[v.quality_status]?.color} style={{ fontSize: 10 }}>
+                {versions.length > 0 && (
+                <div className="rw-section">
+                  <div className="rw-section-head" style={{ marginTop: 20 }}>
+                    <span className="rw-section-icon"><AppstoreOutlined /></span>
+                    <span className="rw-section-title">配音版本</span>
+                    <span className="rw-section-hint">{versions.length} 个版本</span>
+                  </div>
+                  <div className="vw-version-list">
+                    {versions.map((v) => (
+                      <div key={v.id} className={`vw-version-row${v.is_selected ? ' is-selected' : ''}`}>
+                        <span className="vw-version-v">V{v.version_number}</span>
+                        <span className="vw-version-meta">{v.actual_duration_seconds ?? '-'}s · 语速 {v.speed}</span>
+                        <Tag color={QUALITY_STATUS_MAP[v.quality_status]?.color} style={{ fontSize: 10, marginInlineEnd: 0 }}>
                           {QUALITY_STATUS_MAP[v.quality_status]?.label || v.quality_status}
                         </Tag>
-                      ),
-                    },
-                    {
-                      title: '状态',
-                      render: (_, v) => (
                         <Space size={2}>
                           {v.is_selected && <Tag color="green" style={{ fontSize: 10, margin: 0 }}>正式</Tag>}
                           {v.is_stale && <Tag color="error" style={{ fontSize: 10, margin: 0 }}>过期</Tag>}
                           {v.is_mock && <Tag style={{ fontSize: 10, margin: 0 }}>Mock</Tag>}
                         </Space>
-                      ),
-                    },
-                    {
-                      title: '操作',
-                      width: 190,
-                      render: (_, v) => (
-                        <Space size={4}>
+                        <span className="vw-version-actions">
                           {v.audio_url && (
                             <Button size="small" icon={<PlayCircleOutlined />} onClick={() => {
                               if (audioRef.current && v.audio_url) {
@@ -616,24 +597,28 @@ export default function VoiceWorkspace() {
                           >
                             <Button size="small" icon={<MoreOutlined />} aria-label={`V${v.version_number} 更多操作`} title="更多操作" />
                           </Dropdown>
-                        </Space>
-                      ),
-                    },
-                  ]}
-                />
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                )}
               </>
             ) : (
-              <Empty description="请选择左侧分镜" style={{ marginTop: 80 }} />
+              <div className="rw-empty" style={{ marginTop: 60, padding: '48px 20px' }}>
+                <span className="rw-empty-icon"><AudioOutlined /></span>
+                <span className="rw-empty-title">请选择左侧分镜</span>
+                <span className="rw-empty-hint">选择后即可确认朗读文本并生成配音</span>
+              </div>
             )}
           </div>
 
           {/* 右侧：模板参数 */}
           <div className="workspace-inspector voice-inspector">
-            <div className="workspace-panel-heading workspace-panel-heading-compact">
-              <div>
-                <Text strong>配音模板</Text>
-                <Text type="secondary">选择音色并调整朗读参数</Text>
-              </div>
+            <div className="rw-section-head" style={{ marginBottom: 4 }}>
+              <span className="rw-section-icon"><SlidersOutlined /></span>
+              <span className="rw-section-title">配音模板</span>
+              <span className="rw-section-hint">选择音色并调整朗读参数</span>
             </div>
             <Select
               style={{ width: '100%', marginTop: 8 }}
@@ -645,6 +630,17 @@ export default function VoiceWorkspace() {
                 label: `${t.name}${t.voice_provider === 'mock' || t.voice_provider === 'disabled' ? '（演示）' : ''}`,
               }))}
             />
+            <Button
+              type="link"
+              size="small"
+              icon={<LinkOutlined />}
+              style={{ padding: 0, marginTop: 6, fontSize: 12 }}
+              href="https://www.volcengine.com/product/tts"
+              target="_blank"
+              rel="noreferrer"
+            >
+              火山引擎在线试听全部音色
+            </Button>
 
             <Form
               form={form}
@@ -707,7 +703,7 @@ export default function VoiceWorkspace() {
               </Form.Item>
             </Form>
 
-            <Divider style={{ margin: '8px 0' }} />
+            <Divider style={{ margin: '12px 0' }} />
             <Text type="secondary" style={{ fontSize: 12 }}>
               预计时长：{estimate?.estimated_duration_seconds ?? '-'}s（目标 {estimate?.target_duration_seconds ?? '-'}s）
             </Text>
@@ -721,6 +717,7 @@ export default function VoiceWorkspace() {
               type="primary"
               icon={<SoundOutlined />}
               block
+              className="rw-submit"
               style={{ marginTop: 12 }}
               loading={polling}
               disabled={!selectedShot}
