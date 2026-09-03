@@ -127,7 +127,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@fastvideo.cn}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
       ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
-      BACKEND_CORS_ORIGINS: '["http://localhost:5173","http://localhost:8000"]'
+      BACKEND_CORS_ORIGINS: '${BACKEND_CORS_ORIGINS:-["http://localhost:5173","http://localhost:8000"]}'
     ports:
       - "8000:8000"
     volumes:
