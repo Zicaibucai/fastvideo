@@ -188,6 +188,8 @@ from app.api.v1 import (  # noqa: E402
     assets,
     auth,
     collaboration,
+    concat,
+    custom_segment,
     documents,
     facts,
     files,
@@ -225,6 +227,8 @@ app.include_router(voice.pronunciation_router, prefix=api_prefix)
 app.include_router(voice.voice_router, prefix=api_prefix)
 app.include_router(voice.shot_voice_router, prefix=api_prefix)
 app.include_router(video.router, prefix=api_prefix)
+app.include_router(concat.router, prefix=api_prefix)
+app.include_router(custom_segment.router, prefix=api_prefix)
 app.include_router(video_gen.router, prefix=api_prefix)
 app.include_router(settings_api.router, prefix=api_prefix)
 app.include_router(render_presets.router, prefix=api_prefix)

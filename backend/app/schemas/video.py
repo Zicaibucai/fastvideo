@@ -223,6 +223,65 @@ class ExportRequest(BaseModel):
     export_format: str = "mp4"
 
 
+# ============================================================
+# 分镜拼接（独立于视频工程：直接选多个视频素材按顺序拼接）
+# ============================================================
+
+CONCAT_TRANSITIONS = {"none", "fade", "crossfade", "black", "white", "slide_right", "tech_mask"}
+
+
+class ConcatItemIn(BaseModel):
+    asset_id: str
+    # 作用于该片段与下一片段之间的转场；最后一个片段的转场设置被忽略
+    transition_type: str = "none"
+    transition_duration: float = Field(default=0.5, ge=0.1, le=2.0)
+
+
+class ConcatCreateIn(BaseModel):
+    name: str | None = None
+    items: list[ConcatItemIn] = Field(min_length=2)
+    width: int = Field(default=1920, ge=320, le=7680)
+    height: int = Field(default=1080, ge=240, le=4320)
+    fps: int = 25
+
+
+class ConcatTaskOut(TimestampedModel):
+    project_id: str | None
+    status: str
+    progress: int
+    output_key: str | None
+    output_url: str | None
+    file_size: int
+    duration_seconds: float | None
+    error_message: str | None
+    params: dict | None
+
+
+# ============================================================
+# 自定义合成（不绑定分镜：自选视频 + 自输字幕/TTS 直接合成）
+# ============================================================
+
+CUSTOM_SEGMENT_AUDIO_MODES = {"mute", "keep_original", "tts"}
+CUSTOM_SEGMENT_TIME_ADAPTATIONS = {"natural", "safe_stretch", "rife", "loop", "freeze", "trim"}
+CUSTOM_SEGMENT_FIT_MODES = {"cover", "contain", "fill", "blur"}
+
+
+class CustomSegmentIn(BaseModel):
+    name: str | None = None
+    visual_asset_id: str
+    # 缺省时：TTS 模式按文本估算朗读时长，否则取素材自身时长
+    duration: float | None = Field(default=None, ge=0.5, le=120.0)
+    time_adaptation: str = "natural"
+    fit_mode: str = "cover"
+    subtitle_text: str | None = None
+    audio_mode: str = "mute"  # mute | keep_original | tts
+    voice_template_id: str | None = None
+    volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    width: int = Field(default=1920, ge=320, le=7680)
+    height: int = Field(default=1080, ge=240, le=4320)
+    fps: int = 25
+
+
 class ExportTaskOut(TimestampedModel):
     video_project_id: str | None
     project_id: str | None

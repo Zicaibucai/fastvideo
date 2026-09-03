@@ -14,6 +14,7 @@ import {
   DatabaseOutlined,
   BgColorsOutlined,
   VideoCameraAddOutlined,
+  MergeCellsOutlined,
   ArrowLeftOutlined,
   DownOutlined,
   SettingOutlined,
@@ -39,7 +40,8 @@ function projectWorkspaceItems(projectId: string): NonNullable<MenuProps['items'
     { key: `/project/${projectId}/ai-video`, icon: <VideoCameraAddOutlined />, label: 'AI 视频生成' },
     { key: `/project/${projectId}/voice`, icon: <AudioOutlined />, label: '配音制作' },
     { key: `/project/${projectId}/assets`, icon: <SoundOutlined />, label: '素材库' },
-    { key: `/project/${projectId}/video`, icon: <ExportOutlined />, label: '视频工程与导出' },
+    { key: `/project/${projectId}/video`, icon: <ExportOutlined />, label: '合成分镜' },
+    { key: `/project/${projectId}/video-concat`, icon: <MergeCellsOutlined />, label: '分镜拼接' },
     { key: `/project/${projectId}/collaboration`, icon: <TeamOutlined />, label: '协作与审核' },
   ]
 }

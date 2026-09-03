@@ -3832,20 +3832,18 @@ button:active,
 .video-editor-shell {
   display: grid;
   flex: 1 1 auto;
-  grid-template-rows: minmax(0, 1fr) 218px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
 }
 
-.video-workspace-card,
-.video-timeline-card {
+.video-workspace-card {
   min-height: 0;
   margin-bottom: 0 !important;
   overflow: hidden;
 }
 
-.video-workspace-card > .ant-card-body,
-.video-timeline-card > .ant-card-body {
+.video-workspace-card > .ant-card-body {
   height: 100%;
   min-height: 0;
 }
@@ -3980,6 +3978,12 @@ button:active,
   border-left: 1px solid var(--border);
 }
 
+/* 分镜拼接素材列表：加入按钮在文档流内，不需要为绝对定位的 action 预留右侧内边距 */
+.video-concat-sidebar .ant-list-item {
+  min-height: 0;
+  padding: 10px !important;
+}
+
 .video-preview-panel {
   display: flex;
   min-height: 0;
@@ -4013,83 +4017,6 @@ button:active,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.video-timeline-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 42px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.video-timeline-help {
-  margin-left: auto;
-}
-
-.video-timeline-scroller {
-  height: calc(100% - 42px);
-  min-width: 0;
-  overflow: auto;
-  padding: 8px 0;
-}
-
-.video-track-row {
-  display: flex;
-  min-width: max-content;
-  height: 35px;
-  align-items: center;
-}
-
-.video-track-label {
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  display: flex;
-  flex: 0 0 72px;
-  align-items: center;
-  gap: 6px;
-  height: 100%;
-  padding: 0 12px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-}
-
-.video-track-content {
-  display: flex;
-  min-width: max-content;
-  align-items: center;
-  gap: 3px;
-  padding: 0 8px;
-}
-
-.video-track-clip {
-  display: flex;
-  height: 27px;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  color: #ffffff;
-  font-size: 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  opacity: 0.9;
-  transition: opacity 120ms ease, outline-color 120ms ease;
-}
-
-.video-track-clip:hover,
-.video-track-clip.is-selected {
-  opacity: 1;
-  outline: 2px solid var(--brand);
-  outline-offset: 1px;
-}
-
-.video-track-clip-visual { background: #315ead; }
-.video-track-clip-audio { background: #5b7f74; }
-.video-track-clip-subtitle { background: #88724d; }
-.video-track-clip-music { background: #6d6b82; }
 
 .video-export-summary {
   display: flex;
@@ -4258,10 +4185,6 @@ button:active,
 
   .video-workspace-card {
     height: auto;
-  }
-
-  .video-timeline-card {
-    min-height: 190px;
   }
 
   .storyboard-editor-toolbar {

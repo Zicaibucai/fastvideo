@@ -11,6 +11,7 @@ const ProjectDetail = lazy(() => import('./pages/ProjectDetail'))
 const Storyboard = lazy(() => import('./pages/Storyboard'))
 const Assets = lazy(() => import('./pages/Assets'))
 const Video = lazy(() => import('./pages/Video'))
+const VideoConcat = lazy(() => import('./pages/VideoConcat'))
 const DocumentReader = lazy(() => import('./pages/DocumentReader'))
 const Facts = lazy(() => import('./pages/Facts'))
 const RenderWorkspace = lazy(() => import('./pages/RenderWorkspace'))
@@ -95,6 +96,7 @@ export default function App() {
             <Route path="/project/:projectId/ai-video/advanced" element={<ConstructionWorkbenchPage />} />
             <Route path="/project/:projectId/ai-video/templates/new" element={<VideoTemplateCreator />} />
             <Route path="/project/:projectId/video" element={<Video />} />
+            <Route path="/project/:projectId/video-concat" element={<VideoConcat />} />
             <Route path="/project/:projectId/collaboration" element={<Collaboration />} />
             <Route path="/invite/accept" element={<AcceptInvite />} />
           </Route>

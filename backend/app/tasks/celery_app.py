@@ -25,6 +25,8 @@ celery_app = Celery(
         "app.tasks.voice",
         "app.tasks.video_export",
         "app.tasks.video_gen",
+        "app.tasks.video_concat",
+        "app.tasks.custom_segment",
     ],
 )
 

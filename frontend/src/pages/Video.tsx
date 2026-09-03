@@ -19,8 +19,8 @@ import {
   App,
   Drawer,
   Table,
-  Tooltip,
   Image,
+  Radio,
 } from 'antd'
 import {
   PlusOutlined,
@@ -31,17 +31,15 @@ import {
   DownloadOutlined,
   ArrowUpOutlined,
   ArrowDownOutlined,
-  SoundOutlined,
-  PictureOutlined,
-  FileTextOutlined,
   SearchOutlined,
   FilterOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
-import { assetApi, videoApi, exportApi, downloadVideoFile, downloadVideoSegment, voiceApi } from '../api'
+import { assetApi, videoApi, exportApi, downloadVideoFile, downloadVideoSegment, voiceApi, taskApi, customSegmentApi } from '../api'
 import { withAuthToken } from '../api/client'
 import { CollabEntry } from '../components/collab/CollabEntry'
-import type { Asset, AudioVersion, VideoProject, VideoSegment, PreflightResult, ExportTask } from '../api/types'
+import type { Asset, AudioVersion, VideoProject, VideoSegment, PreflightResult, ExportTask, RenderTask, VoiceTemplate } from '../api/types'
 import { useProjectNotifications } from '../components/ProjectNotificationCenter'
 
 const { Title, Text } = Typography
@@ -51,16 +49,6 @@ const FITS = [
   { label: '完整包含(contain)', value: 'contain' },
   { label: '拉伸填满(fill)', value: 'fill' },
   { label: '模糊背景(blur)', value: 'blur' },
-]
-
-const TRANSITIONS = [
-  { label: '无转场', value: 'none' },
-  { label: '淡入淡出', value: 'fade' },
-  { label: '交叉溶解', value: 'crossfade' },
-  { label: '黑场', value: 'black' },
-  { label: '白场', value: 'white' },
-  { label: '左右推移', value: 'slide_right' },
-  { label: '科技蓝遮罩', value: 'tech_mask' },
 ]
 
 const TIME_ADAPTATIONS = [
@@ -101,6 +89,14 @@ export default function Video() {
   const [segmentSearch, setSegmentSearch] = useState('')
   const [segmentFilter, setSegmentFilter] = useState<'all' | 'issues' | 'visual' | 'audio'>('all')
   const [createForm] = Form.useForm()
+  // 自定义合成（不绑定分镜：自选视频 + 自输字幕/TTS）
+  const [customOpen, setCustomOpen] = useState(false)
+  const [customAssets, setCustomAssets] = useState<Asset[]>([])
+  const [voiceTemplates, setVoiceTemplates] = useState<VoiceTemplate[]>([])
+  const [customTask, setCustomTask] = useState<RenderTask | null>(null)
+  const [customForm] = Form.useForm()
+  const customAudioMode = Form.useWatch('audio_mode', customForm) || 'mute'
+  const customPollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
   const [activeRenderSegmentId, setActiveRenderSegmentId] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -131,6 +127,7 @@ export default function Video() {
     if (segmentPatchTimer.current) clearTimeout(segmentPatchTimer.current)
     if (segmentPollTimer.current) clearInterval(segmentPollTimer.current)
     if (exportPollTimer.current) clearInterval(exportPollTimer.current)
+    if (customPollTimer.current) clearInterval(customPollTimer.current)
     if (delayedFetchTimer.current) clearTimeout(delayedFetchTimer.current)
     if (videoRef.current) {
       videoRef.current.pause()
@@ -273,6 +270,68 @@ export default function Video() {
     setSelectedSeg(null)
     setPreflight(null)
     fetchVp(id)
+  }
+
+  // 自定义合成：打开抽屉时加载全部视频素材（含已合成结果）与配音模板
+  const openCustomDrawer = () => {
+    setCustomOpen(true)
+    setCustomTask(null)
+    assetApi.list(projectId, 'video').then((res) => setCustomAssets(res.data)).catch(() => setCustomAssets([]))
+    voiceApi.list(projectId).then((res) => setVoiceTemplates(res.data)).catch(() => setVoiceTemplates([]))
+    customForm.setFieldsValue({
+      resolution: vp ? `${vp.width}x${vp.height}` : '1920x1080',
+      fps: vp?.fps || 25,
+    })
+  }
+
+  const pollCustomTask = (taskId: string) => {
+    if (customPollTimer.current) clearInterval(customPollTimer.current)
+    const timer = setInterval(() => {
+      taskApi.detail(taskId).then((r) => {
+        setCustomTask(r.data)
+        if (['success', 'failed', 'cancelled'].includes(r.data.status)) {
+          clearInterval(timer)
+          customPollTimer.current = null
+          if (r.data.status === 'success') message.success('自定义合成完成，已存入素材库，可在分镜拼接中选用')
+          if (r.data.status === 'failed') message.error(`合成失败：${r.data.error_message || '未知错误'}`)
+        }
+      }).catch(() => {
+        clearInterval(timer)
+        customPollTimer.current = null
+      })
+    }, 1500)
+    customPollTimer.current = timer
+  }
+
+  const handleCustomCreate = async () => {
+    const values = await customForm.validateFields().catch(() => null)
+    if (!values) return
+    const [width, height] = String(values.resolution || '1920x1080').split('x').map(Number)
+    try {
+      const res = await customSegmentApi.create(projectId, {
+        name: values.name?.trim() || undefined,
+        visual_asset_id: values.visual_asset_id,
+        duration: values.duration || undefined,
+        time_adaptation: values.time_adaptation,
+        fit_mode: values.fit_mode,
+        subtitle_text: values.subtitle_text?.trim() || undefined,
+        audio_mode: values.audio_mode,
+        voice_template_id: values.audio_mode === 'tts' ? values.voice_template_id : undefined,
+        volume: values.volume,
+        width,
+        height,
+        fps: values.fps,
+      })
+      setCustomTask({ id: res.data.task_id, status: res.data.status, progress: 0 } as RenderTask)
+      if (!['success', 'failed'].includes(res.data.status)) {
+        pollCustomTask(res.data.task_id)
+      } else {
+        taskApi.detail(res.data.task_id).then((r) => setCustomTask(r.data)).catch(() => {})
+        if (res.data.status === 'success') message.success('自定义合成完成，已存入素材库，可在分镜拼接中选用')
+      }
+    } catch {
+      // 已提示
+    }
   }
 
   const handleCreate = async () => {
@@ -462,6 +521,10 @@ export default function Video() {
     ? segments.find((segment) => segment.id === activeRenderSegmentId)
     : segments.find((segment) => ['queued', 'running'].includes(segment.render_status))
 
+  const customResult = customTask?.status === 'success'
+    ? (customTask.result as { name?: string; output_url?: string; duration?: number; is_mock_tts?: boolean } | undefined)
+    : undefined
+
   const playSegOutput = (seg: VideoSegment) => {
     const url = seg.needs_rebuild || seg.render_status !== 'success'
       ? seg.visual_url
@@ -487,7 +550,7 @@ export default function Video() {
     <div className="video-editor-page">
       <div className="video-editor-toolbar">
         <div className="video-editor-heading">
-          <Title level={3} style={{ margin: 0 }}>视频工作区</Title>
+          <Title level={3} style={{ margin: 0 }}>合成分镜</Title>
           {projectId && vpId && (
             <CollabEntry projectId={projectId} targetType="video_project" targetId={vpId} label="协作与审核" />
           )}
@@ -517,6 +580,7 @@ export default function Video() {
           )}
           {vp && <Button type="primary" icon={<ExportOutlined />} onClick={handleFormalExport}>导出成片</Button>}
           <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建工程</Button>
+          <Button icon={<VideoCameraOutlined />} onClick={openCustomDrawer}>自定义合成</Button>
         </Space>
       </div>
 
@@ -758,12 +822,9 @@ export default function Video() {
                       <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.45 }}>
                         RIFE 是高质量补帧策略；未安装或运行失败时会明确报错。循环与冻结适合素材偏短的分镜。选择后点击“合成分段”即可验证效果。
                       </Text>
-                      <Text style={{ fontSize: 12 }}>转场</Text>
-                      <Select size="small" style={{ width: '100%' }} value={selectedSeg.transition_type} options={TRANSITIONS}
-                        onChange={(v) => handleSegmentPatch(selectedSeg, { transition_type: v })} />
-                      <Text style={{ fontSize: 12 }}>转场时长：{selectedSeg.transition_duration}s</Text>
-                      <Slider min={0.1} max={2} step={0.1} value={selectedSeg.transition_duration}
-                        onChange={(v) => handleSegmentPatchDebounced(selectedSeg, { transition_duration: v })} />
+                      <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.45 }}>
+                        分段之间的转场在「分镜拼接」中统一设置。
+                      </Text>
                       <Text style={{ fontSize: 12 }}>分段时长：{selectedSeg.duration}s</Text>
                       <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.45 }}>
                         默认跟随解说词分镜时长；需要手动调整时先打开“锁定时长”。
@@ -810,40 +871,6 @@ export default function Video() {
                   <Empty description="选择左侧分段" />
                 )}
               </div>
-            </div>
-          </Card>
-
-          {/* 底部：多轨时间轴 */}
-          <Card className="video-timeline-card" size="small" styles={{ body: { padding: 0 } }}>
-            <div className="video-timeline-header">
-              <Text strong>时间轴</Text>
-              <Text type="secondary">{segments.length} 段 / {totalDuration.toFixed(1)}s</Text>
-              <Text type="secondary" className="video-timeline-help">点击轨道片段可跳转预览</Text>
-            </div>
-            <div className="video-timeline-scroller">
-              {[
-                { key: 'visual', label: '画面', icon: <PictureOutlined /> },
-                { key: 'audio', label: '配音', icon: <SoundOutlined /> },
-                { key: 'subtitle', label: '字幕', icon: <FileTextOutlined /> },
-                { key: 'music', label: '音乐', icon: <SoundOutlined /> },
-              ].map((track) => (
-                <div className="video-track-row" key={track.key}>
-                  <div className="video-track-label">{track.icon}<span>{track.label}</span></div>
-                  <div className="video-track-content">
-                    {segments.map((s) => (
-                      <Tooltip key={`${track.key}-${s.id}`} title={`#${s.sequence} ${s.shot_title || ''} ${s.duration}s`}>
-                        <div
-                          className={`video-track-clip video-track-clip-${track.key} ${selectedSeg?.id === s.id ? 'is-selected' : ''}`}
-                          style={{ width: Math.max(48, s.duration * 8) }}
-                          onClick={() => { setSelectedSeg(s); playSegOutput(s) }}
-                        >
-                          {track.key === 'visual' ? (s.has_visual ? s.sequence : '缺失') : track.key === 'audio' ? (s.has_audio ? '配音' : '缺失') : track.key === 'subtitle' ? (s.subtitle_enabled ? '字幕' : '') : (vp.music_tracks?.length ? '音乐' : '')}
-                        </div>
-                      </Tooltip>
-                    ))}
-                  </div>
-                </div>
-              ))}
             </div>
           </Card>
           </div>
@@ -951,6 +978,158 @@ export default function Video() {
           </Drawer>
         </>
       )}
+
+      {/* 自定义合成（不绑定分镜） */}
+      <Drawer
+        title="自定义合成"
+        open={customOpen}
+        onClose={() => setCustomOpen(false)}
+        width={600}
+        footer={(
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <Button onClick={() => setCustomOpen(false)}>关闭</Button>
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              loading={Boolean(customTask && ['queued', 'running'].includes(customTask.status))}
+              onClick={handleCustomCreate}
+            >
+              开始合成
+            </Button>
+          </Space>
+        )}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Text type="secondary">
+            不依赖分镜：自己选视频、输入字幕、选择配音方式，直接合成一个片段。产出会存入素材库，可在「分镜拼接」中继续使用。
+          </Text>
+          <Form
+            form={customForm}
+            layout="vertical"
+            initialValues={{
+              time_adaptation: 'natural',
+              fit_mode: 'cover',
+              audio_mode: 'mute',
+              volume: 1,
+              resolution: '1920x1080',
+              fps: 25,
+            }}
+          >
+            <Form.Item name="name" label="片段名称（可选）">
+              <Input placeholder="默认：自定义合成·时间戳" />
+            </Form.Item>
+            <Form.Item name="visual_asset_id" label="视频素材" rules={[{ required: true, message: '请选择视频素材' }]}>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择视频素材（含已合成的分段/拼接结果）"
+                options={customAssets.map((asset) => ({
+                  value: asset.id,
+                  label: `${asset.name}${asset.duration_seconds ? `（${asset.duration_seconds.toFixed(1)}s）` : ''}`,
+                }))}
+                optionRender={(option) => {
+                  const asset = customAssets.find((item) => item.id === option.value)
+                  const frameUrl = asset
+                    ? withAuthToken(`/projects/${projectId}/assets/${asset.id}/first-frame`)
+                    : undefined
+                  return (
+                    <Space size={8} style={{ minWidth: 0 }}>
+                      {frameUrl && (
+                        <Image
+                          src={frameUrl}
+                          alt=""
+                          preview={false}
+                          width={56}
+                          height={34}
+                          style={{ objectFit: 'cover', borderRadius: 4, flex: 'none' }}
+                        />
+                      )}
+                      <Text ellipsis={{ tooltip: asset?.name }}>{String(option.label || '')}</Text>
+                    </Space>
+                  )
+                }}
+              />
+            </Form.Item>
+            <Space size={16} wrap>
+              <Form.Item name="duration" label="分段时长（秒）" tooltip="留空时：TTS 按朗读时长，其他模式跟随素材时长">
+                <InputNumber min={0.5} max={120} step={0.5} placeholder="自动" style={{ width: 110 }} />
+              </Form.Item>
+              <Form.Item name="time_adaptation" label="时长适配策略">
+                <Select options={TIME_ADAPTATIONS} style={{ width: 210 }} />
+              </Form.Item>
+              <Form.Item name="fit_mode" label="适配模式">
+                <Select options={FITS} style={{ width: 170 }} />
+              </Form.Item>
+            </Space>
+            <Form.Item name="subtitle_text" label="字幕文本（可选）" tooltip="按换行和标点自动切句，在分段时长内均匀分配">
+              <Input.TextArea rows={4} placeholder="每句一行或用标点分隔，例如：&#10;项目区位优势明显。&#10;交通便利，配套完善。" />
+            </Form.Item>
+            <Form.Item name="audio_mode" label="配音方式">
+              <Radio.Group
+                options={[
+                  { value: 'keep_original', label: '保留原声' },
+                  { value: 'mute', label: '静音' },
+                  { value: 'tts', label: 'TTS 配音' },
+                ]}
+                optionType="button"
+              />
+            </Form.Item>
+            {customAudioMode === 'tts' && (
+              <Form.Item
+                name="voice_template_id"
+                label="配音模板"
+                rules={[{ required: true, message: '请选择配音模板' }]}
+                extra="TTS 朗读上方填写的字幕文本；模板在「配音制作」页管理。"
+              >
+                <Select
+                  placeholder={voiceTemplates.length ? '选择配音模板' : '暂无可用配音模板'}
+                  options={voiceTemplates.map((tpl) => ({ value: tpl.id, label: `${tpl.name}（${tpl.voice_provider}）` }))}
+                />
+              </Form.Item>
+            )}
+            <Space size={16} wrap>
+              <Form.Item name="volume" label="音量" style={{ width: 200 }}>
+                <Slider min={0} max={2} step={0.05} />
+              </Form.Item>
+              <Form.Item name="resolution" label="分辨率">
+                <Select
+                  options={[{ value: '1920x1080', label: '1920 × 1080' }, { value: '1280x720', label: '1280 × 720' }]}
+                  style={{ width: 140 }}
+                />
+              </Form.Item>
+              <Form.Item name="fps" label="帧率">
+                <Select
+                  options={[{ value: 24, label: '24fps' }, { value: 25, label: '25fps' }, { value: 30, label: '30fps' }]}
+                  style={{ width: 90 }}
+                />
+              </Form.Item>
+            </Space>
+          </Form>
+
+          {customTask && ['queued', 'running'].includes(customTask.status) && (
+            <Progress percent={customTask.progress} status="active" format={(p) => `合成进度 ${p}%`} />
+          )}
+          {customResult?.output_url && (
+            <Card size="small" title={`合成完成 · ${customResult.name || ''}`}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <video
+                  src={withAuthToken(customResult.output_url)}
+                  controls
+                  style={{ width: '100%', borderRadius: 6, background: '#15191f' }}
+                />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  时长 {Number(customResult.duration || 0).toFixed(1)}s
+                  {customResult.is_mock_tts ? ' · 演示配音（Mock TTS）' : ''}
+                  ，已存入素材库，可在「分镜拼接」中选用。
+                </Text>
+              </Space>
+            </Card>
+          )}
+          {customTask?.status === 'failed' && (
+            <Text type="danger">合成失败：{customTask.error_message || '未知错误'}</Text>
+          )}
+        </Space>
+      </Drawer>
 
       {/* 新建视频工程 */}
       <Modal title="新建视频工程" open={createOpen} onOk={handleCreate} onCancel={() => setCreateOpen(false)} width={520}>

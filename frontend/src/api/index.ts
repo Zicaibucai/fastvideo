@@ -3,6 +3,8 @@ import type {
   AiStatus,
   Asset,
   AudioVersion,
+  ConcatItem,
+  ConcatTask,
   DocumentChunk,
   DocumentPage,
   ExportTask,
@@ -440,6 +442,34 @@ export const exportApi = {
   detail: (id: string) => api.get<ExportTask>(`/exports/${id}`),
   cancel: (id: string) => api.post<ExportTask>(`/exports/${id}/cancel`),
   retry: (id: string) => api.post<ExportTask>(`/exports/${id}/retry`),
+}
+
+// ---------- 分镜拼接 ----------
+export const concatApi = {
+  list: (projectId: string) => api.get<ConcatTask[]>(`/projects/${projectId}/video-concats`),
+  create: (projectId: string, payload: { name?: string; width?: number; height?: number; fps?: number; items: ConcatItem[] }) =>
+    api.post<ConcatTask>(`/projects/${projectId}/video-concats`, payload),
+  detail: (id: string) => api.get<ConcatTask>(`/video-concats/${id}`),
+  cancel: (id: string) => api.post<ConcatTask>(`/video-concats/${id}/cancel`),
+  retry: (id: string) => api.post<ConcatTask>(`/video-concats/${id}/retry`),
+}
+
+export async function downloadConcatFile(task: ConcatTask) {
+  const resp = await fetch(`/api/v1/video-concats/${task.id}/download`, { credentials: 'include' })
+  if (!resp.ok) throw new Error('下载失败')
+  const blob = await resp.blob()
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  const name = task.params?.name || 'concat'
+  link.download = `${name}_${task.id.slice(0, 8)}.mp4`
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
+// ---------- 自定义合成（不绑定分镜） ----------
+export const customSegmentApi = {
+  create: (projectId: string, payload: JsonObject) =>
+    api.post<{ task_id: string; status: string }>(`/projects/${projectId}/custom-segments`, payload),
 }
 
 // ---------- 视频文件下载（带认证） ----------

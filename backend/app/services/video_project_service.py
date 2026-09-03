@@ -115,7 +115,7 @@ def _persist_video_render_asset(
         "owner_key": owner_key,
         "version": version,
         "is_current": True,
-        "category": "视频工程合成",
+        "category": (meta or {}).get("category", "视频工程合成"),
     }
     asset = Asset(
         project_id=project_id,
@@ -129,7 +129,7 @@ def _persist_video_render_asset(
         height=height,
         duration_seconds=round(duration, 3),
         sha256=hashlib.sha256(data).hexdigest(),
-        project_stage="视频工程合成",
+        project_stage=(meta or {}).get("category", "视频工程合成"),
         is_ai_generated=False,
         generated_by="video_composer",
         meta=asset_meta,

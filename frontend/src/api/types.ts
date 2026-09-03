@@ -883,6 +883,25 @@ export interface ExportTask {
   created_at: string
 }
 
+export interface ConcatItem {
+  asset_id: string
+  transition_type?: string
+  transition_duration?: number
+}
+
+export interface ConcatTask {
+  id: string
+  project_id?: string
+  status: string
+  progress: number
+  output_url?: string
+  file_size: number
+  duration_seconds?: number
+  error_message?: string
+  params?: JsonObject & { name?: string; items?: ConcatItem[] }
+  created_at: string
+}
+
 export interface AiStatus {
   llm: { provider: string; available: boolean; model: string }
   image: { provider: string; available: boolean; model: string }
